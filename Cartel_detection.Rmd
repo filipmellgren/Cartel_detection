@@ -1,0 +1,105 @@
+---
+title: "Untitled"
+author: "Filip Mellgren"
+date: '2020-02-29'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(tidyverse)
+library(viridis)
+df <- rio::import("Data_Buehler_Wallimann.xlsx")
+```
+
+```{r, include = FALSE}
+# Create statistics used for behavioral screening 
+# Note, formula (6) for altrd MIGHT be wrong in the paper. Implemented with wrong sign.
+df %>% arrange(project, bid) %>% group_by(project) %>% 
+   mutate(
+     pairwise_diff = bid - lag(bid, order_by=bid)) %>%
+  summarise(
+    sdev_bid = sqrt(var(bid)), 
+    mean_bid = mean(bid), 
+    no_bids = n(),
+    win_bid = min(bid),
+    date = first(anonymiseddate), 
+    contract_type = first(contract_type), 
+    procedure = first(procedure),
+    diff = min(bid[bid!=min(bid)]) - min(bid),
+    rel_diff = diff / min(bid),
+    kurt = sum( ((bid - mean(bid)) / sdev_bid)^4),
+    skew = sum( ((bid - mean(bid)) / sdev_bid)^3),
+    rd = diff/sqrt(var((bid[bid!=min(bid)]))),
+    altrd = (no_bids - 1) * diff / (sum(pairwise_diff, na.rm = TRUE) - diff),
+    altrd2 = (no_bids - 1) * diff / (min(bid[bid!=min(bid)]) - max(bid)) # Equivalent magnitude (but takes reversed sign into account)
+    ) %>%
+  mutate(
+    CV = sdev_bid / mean_bid, 
+    kurt = kurt * no_bids*(no_bids+1) / ((no_bids - 1)*(no_bids - 2)* (no_bids - 3)),
+    kurt = kurt - 3 * (no_bids - 1)^3 / ((no_bids - 2) * no_bids - 3),
+    skew = skew * no_bids / ( (no_bids - 1) * (no_bids -2) )
+    ) -> df_agg
+```
+```{r}
+# TODO: find a plan for how to deal with the drop in observations.
+# TODO: first delete procedure variable as this contains many Nan but is not necessary
+# TODO: filter only based on variables we will use to genrrate probabilities based on sig
+# TODO: motivate specification (3 or 4)
+df_agg %>% na.omit() %>% filter_all(any_vars(!is.infinite(.))) -> df_agg
+```
+
+```{r model}
+# Alternatice way: force coefficients: https://tolstoy.newcastle.edu.au/R/e2/help/07/08/24294.html
+beta0 = 0.82
+beta1 = -0.48
+beta2 = 0.73
+beta3 = 0.13
+beta4 = 0.04
+beta5 = 0.17
+  
+df_agg %>% 
+  mutate(
+    probability_collusion = 1 / (1 + exp(-(beta0 + beta1 * CV + 
+                                             beta2 * altrd2 + # TODO: altrd2 or not
+                                             beta3 * no_bids +
+                                             beta4 * skew +
+                                             beta5 * rd))),
+    exp_harm = probability_collusion * win_bid # make more precise
+    ) -> df_agg
+```
+```{r}
+df_agg %>%  ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, color=exp_harm)) + 
+  theme_minimal() +
+  geom_point(size = 2) + scale_colour_continuous(type='viridis') +
+  labs(x = "Probability of collusion", 
+       y = "Winning bid, log", 
+       color = "Expected harm",
+       title = "Projects by probability of collusion and value")
+```
+Stort glapp mellan vinnaren och förloren innebär potentiellt att samhällsförlusten är hög
+
+```{r structural_breaks}
+# builds upon section 6.1.2 in Bucirossi's handbook
+# TODO: NA is currently white
+df %>% ggplot(aes(x = anonymiseddate, y = log(bid), color = as.factor(contract_type))) +
+  geom_smooth(aes(fill =as.factor(contract_type))) +
+  theme_minimal() + scale_colour_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE)
+```
+
+```{r prob_collusion_time}
+df_agg %>% 
+  ggplot(aes(x = date, y = probability_collusion, color = as.factor(contract_type))) +
+  geom_smooth(aes(fill =as.factor(contract_type))) +
+  theme_minimal() + scale_colour_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE) 
+```
+
+Find markers from OECD summary, look at CV, when it is low, there is an increased likelihood of a cartel. 
+
+Also, Difference between the two lowest bids divided by the standard deviation of the "cover bids" (all bids that did not win)".
+
