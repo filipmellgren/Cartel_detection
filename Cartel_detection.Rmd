@@ -1,8 +1,10 @@
 ---
-title: "Untitled"
-author: "Filip Mellgren"
+title: "Cartel detection"
+author: "Margherita Atzei, Sebastian Kimm Friedberg, Oscar Krumlinde, Filip Mellgren"
 date: '2020-02-29'
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -14,6 +16,9 @@ library(tidyverse)
 library(viridis)
 df <- rio::import("Data_Buehler_Wallimann.xlsx")
 ```
+
+# Create summary statistics
+These statistics are based on those in the ML paper.
 
 ```{r, include = FALSE}
 # Create statistics used for behavioral screening 
@@ -44,43 +49,51 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
     skew = skew * no_bids / ( (no_bids - 1) * (no_bids -2) )
     ) -> df_agg
 ```
-```{r}
+
+```{r cleaning}
 # TODO: find a plan for how to deal with the drop in observations.
-# TODO: first delete procedure variable as this contains many Nan but is not necessary
-# TODO: filter only based on variables we will use to genrrate probabilities based on sig
-# TODO: motivate specification (3 or 4)
-df_agg %>% na.omit() %>% filter_all(any_vars(!is.infinite(.))) -> df_agg
+# Lost observations due to missings: 4434 - 4255 = 179
+df_agg %>% select(project, CV, altrd, no_bids) %>% na.omit() %>% filter_all(any_vars(!is.infinite(.))) -> df_agg_filtered
+
+df_agg <- left_join(df_agg_filtered, df_agg)
 ```
+
+# Apply model
+In the ML paper, the authors fit a logistic regression and give the coefficients. We simply use these coefficients to generate predictions. Important, this implicitly assumes our data come from the same distribution as the data found in the ML paper. This assuption must be discussed when we present our evidence.
+
+Also,  note that this is only an exploratory anb rough draft so far and that there are some things to do before the actual graphs can be produced. 
 
 ```{r model}
 # Alternatice way: force coefficients: https://tolstoy.newcastle.edu.au/R/e2/help/07/08/24294.html
-beta0 = 0.82
-beta1 = -0.48
-beta2 = 0.73
-beta3 = 0.13
-beta4 = 0.04
-beta5 = 0.17
-  
+m3 <- c(1.02, -0.49, 0.92, 0.09)
+m4 <- c(1.51, -0.47, 0.95, 0)
+names(m3) <- c("CONST", "CV", "ALTRD", "NoBIDS")
+names(m4) <- names(m3)
+model <- m4
+
 df_agg %>% 
   mutate(
-    probability_collusion = 1 / (1 + exp(-(beta0 + beta1 * CV + 
-                                             beta2 * altrd2 + # TODO: altrd2 or not
-                                             beta3 * no_bids +
-                                             beta4 * skew +
-                                             beta5 * rd))),
+    probability_collusion = 1 / (1 + exp(-(model["CONST"] + model["CV"] * CV + 
+                                             model["ALTRD"] * altrd +
+                                             model["NoBIDS"] * no_bids))),
     exp_harm = probability_collusion * win_bid # make more precise
     ) -> df_agg
 ```
+Because of the possible mistake in the paper, we're unsure shether to use altrd or altrd2.
+
+
 ```{r}
 df_agg %>%  ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, color=exp_harm)) + 
   theme_minimal() +
-  geom_point(size = 2) + scale_colour_continuous(type='viridis') +
+  geom_point(size = 2, alpha = 0.3) + scale_colour_continuous(type='viridis') +
   labs(x = "Probability of collusion", 
        y = "Winning bid, log", 
        color = "Expected harm",
        title = "Projects by probability of collusion and value")
 ```
-Stort glapp mellan vinnaren och förloren innebär potentiellt att samhällsförlusten är hög
+
+# Time series for structural breaks
+Idea is to identify break points in one metric and then use a Chow test to test for structural breaks in another important statistic.
 
 ```{r structural_breaks}
 # builds upon section 6.1.2 in Bucirossi's handbook
@@ -96,7 +109,7 @@ df_agg %>%
   ggplot(aes(x = date, y = probability_collusion, color = as.factor(contract_type))) +
   geom_smooth(aes(fill =as.factor(contract_type))) +
   theme_minimal() + scale_colour_viridis(discrete = TRUE) +
-  scale_fill_viridis(discrete = TRUE) 
+  scale_fill_viridis(discrete = TRUE)
 ```
 
 Find markers from OECD summary, look at CV, when it is low, there is an increased likelihood of a cartel. 
