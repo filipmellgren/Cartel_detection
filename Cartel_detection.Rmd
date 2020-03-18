@@ -119,17 +119,22 @@ conf_bool <- c("Cartel", "Fair")
 conf_status <- c("Cartel", "Fair")
 conf_mat <- expand.grid(X=conf_bool, Y=conf_status)
 conf_mat$conf_data <- c(TP[[4]] * num_pos , FP[[4]] * num_pos, FN[[4]] * num_neg, TN[[4]]*num_neg)
+conf_mat$colors <- c(0,1,1,0)
+
 
 
 
 conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
-  geom_tile(aes(fill = conf_data)) + 
+  geom_tile(aes(fill = colors)) + 
   labs(title = "Model accuracy",
        y = "Predicted cartel status", x = "Actual cartel status",
        subtitle  = "Figure shows expected number of tenders in each category \nTotal number of tenders classified: 3882") + 
   theme_minimal() +
-  geom_text(aes(label = round(conf_data, 2), size = 4, color = "")) +
-  scale_fill_distiller(palette = "YlGnBu")
+  geom_text(aes(label = round(conf_data, 2), size = 4), color = "black") +
+ # scale_fill_distiller(palette = "RdYlGn", values = c(-0.4, 1.4)) +
+  scale_fill_gradient2(low = "aquamarine", high = "#FA8072", mid = "white", 
+   midpoint = 0.5, limit = c(0,1.2), space = "Lab", 
+    name="")
 ```
 
 
