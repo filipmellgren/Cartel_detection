@@ -1,7 +1,7 @@
 ---
 title: "Cartel detection"
 author: "Margherita Atzei, Sebastian Kimm Friedberg, Oscar Krumlinde, Filip Mellgren"
-date: '2020-02-29'
+date: '2020-03-11'
 output:
   pdf_document: default
   html_document: default
@@ -52,8 +52,8 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
 
 ```{r cleaning}
 # TODO: find a plan for how to deal with the drop in observations.
-# Lost observations due to missings: 4434 - 4255 = 179
-df_agg %>% select(project, CV, altrd, no_bids) %>% na.omit() %>% filter_all(any_vars(!is.infinite(.))) -> df_agg_filtered
+# Lost observations due to missings: 4434 - 3882 = 552
+df_agg %>% select(project, CV, altrd, no_bids) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
 
 df_agg <- left_join(df_agg_filtered, df_agg)
 ```
@@ -69,12 +69,12 @@ m3 <- c(1.02, -0.49, 0.92, 0.09)
 m4 <- c(1.51, -0.47, 0.95, 0)
 names(m3) <- c("CONST", "CV", "ALTRD", "NoBIDS")
 names(m4) <- names(m3)
-model <- m4
+model <- m3
 
-df_agg %>% 
+df_agg %>%
   mutate(
     probability_collusion = 1 / (1 + exp(-(model["CONST"] + model["CV"] * CV + 
-                                             model["ALTRD"] * altrd +
+                                             model["ALTRD"] * altrd2 +
                                              model["NoBIDS"] * no_bids))),
     exp_harm = probability_collusion * win_bid # make more precise
     ) -> df_agg
@@ -83,7 +83,7 @@ Because of the possible mistake in the paper, we're unsure shether to use altrd 
 
 
 ```{r}
-df_agg %>%  ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, color=exp_harm)) + 
+df_agg %>% ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, color=exp_harm)) + 
   theme_minimal() +
   geom_point(size = 2, alpha = 0.3) + scale_colour_continuous(type='viridis') +
   labs(x = "Probability of collusion", 
@@ -91,8 +91,52 @@ df_agg %>%  ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, co
        color = "Expected harm",
        title = "Projects by probability of collusion and value")
 ```
+```{r}
+# Data from ML paper fig 3 and Oscars eye balling skills
+TP <- c(1, 0.91, 0.85, 0.77, 0.64, 0.38)
+TN <- c(0, 0.69, 0.78, 0.86, 0.91, 0.97)
+FP <- 1 - TP
+FN <- 1 - TN
+dc <- c(0, 0.5, 0.6, 0.7, 0.8, 0.9)
+certainty_info <- cbind(dc, TP, TN, FP, FN) %>% as_tibble()
+
+# TODO: ok to have varying decision criteria?
+df_agg <- df_agg %>% mutate(floor_p_col = floor(probability_collusion * 10)/10,
+                           floor_p_col = if_else(floor_p_col < 0.5, 0, floor_p_col))
+
+df_agg <- left_join(df_agg, certainty_info, by = c("floor_p_col" = "dc"))
+
+df_agg <- df_agg %>% mutate(precision = TP / (TP + FP),
+                  recall = TP / (TP + FN))
+```
+
+```{r confusion_matrix}
+# Use 0.7 as decision criteria
+dc <- 0.7
+num_pos <- df_agg %>% filter(probability_collusion >= dc) %>% nrow()
+num_neg <- df_agg %>% filter(probability_collusion < dc) %>% nrow()
+conf_bool <- c("Cartel", "Fair")
+conf_status <- c("Cartel", "Fair")
+conf_mat <- expand.grid(X=conf_bool, Y=conf_status)
+conf_mat$conf_data <- c(TP[[4]] * num_pos , FP[[4]] * num_pos, FN[[4]] * num_neg, TN[[4]]*num_neg)
+
+
+
+conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
+  geom_tile(aes(fill = conf_data)) + 
+  labs(title = "Model accuracy",
+       y = "Predicted cartel status", x = "Actual cartel status",
+       subtitle  = "Figure shows expected number of tenders in each category \nTotal number of tenders classified: 3882") + 
+  theme_minimal() +
+  geom_text(aes(label = round(conf_data, 2), size = 4, color = "")) +
+  scale_fill_distiller(palette = "YlGnBu")
+```
+
 
 # Time series for structural breaks
+
+Afer meeting. Do a structural break which provides further evidence. Improtant to invclude as further evidence.
+
 Idea is to identify break points in one metric and then use a Chow test to test for structural breaks in another important statistic.
 
 ```{r structural_breaks}
@@ -111,8 +155,18 @@ df_agg %>%
   theme_minimal() + scale_colour_viridis(discrete = TRUE) +
   scale_fill_viridis(discrete = TRUE)
 ```
+```{r}
+df_agg %>% filter(rd < 2000) %>% 
+  ggplot(aes(x = date, y = rd, color = as.factor(contract_type))) +
+  geom_smooth(aes(fill =as.factor(contract_type))) +
+  theme_minimal() + scale_colour_viridis(discrete = TRUE) +
+  scale_fill_viridis(discrete = TRUE)
+```
 
 Find markers from OECD summary, look at CV, when it is low, there is an increased likelihood of a cartel. 
 
 Also, Difference between the two lowest bids divided by the standard deviation of the "cover bids" (all bids that did not win)".
+
+Descriptive statistics, by type:
+Procedure type (var, mean, bids)
 
