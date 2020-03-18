@@ -113,26 +113,25 @@ df_agg <- df_agg %>% mutate(precision = TP / (TP + FP),
 ```{r confusion_matrix}
 # Use 0.7 as decision criteria
 dc <- 0.7
+dc_ix <- 4
 num_pos <- df_agg %>% filter(probability_collusion >= dc) %>% nrow()
 num_neg <- df_agg %>% filter(probability_collusion < dc) %>% nrow()
-conf_bool <- c("Cartel", "Fair")
-conf_status <- c("Cartel", "Fair")
-conf_mat <- expand.grid(X=conf_bool, Y=conf_status)
-conf_mat$conf_data <- c(TP[[4]] * num_pos , FP[[4]] * num_pos, FN[[4]] * num_neg, TN[[4]]*num_neg)
+conf_actual <- c("Cartel", "Fair")
+conf_pred <- c("Cartel", "Fair")
+conf_mat <- expand.grid(X=conf_pred, Y=conf_actual)
+conf_mat$conf_data <- c(TP[[dc_ix]] * num_pos , FN[[dc_ix]] * num_pos, 
+                        FP[[dc_ix]] * num_neg, TN[[dc_ix]]*num_neg)
 conf_mat$colors <- c(0,1,1,0)
-
-
-
 
 conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
   geom_tile(aes(fill = colors)) + 
   labs(title = "Model accuracy",
-       y = "Predicted cartel status", x = "Actual cartel status",
+       y = "Actual cartel status", x = "Predicted cartel status",
        subtitle  = "Figure shows expected number of tenders in each category \nTotal number of tenders classified: 3882") + 
   theme_minimal() +
-  geom_text(aes(label = round(conf_data, 2), size = 4), color = "black") +
+  geom_text(aes(label = round(conf_data, 2)),size = 8, color = "white") +
  # scale_fill_distiller(palette = "RdYlGn", values = c(-0.4, 1.4)) +
-  scale_fill_gradient2(low = "aquamarine", high = "#FA8072", mid = "white", 
+  scale_fill_gradient2(low = "skyblue", high = "#FA8072", mid = "white", 
    midpoint = 0.5, limit = c(0,1.2), space = "Lab", 
     name="")
 ```
