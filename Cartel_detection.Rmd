@@ -63,6 +63,9 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
 df_agg %>% select(project, CV, altrd, no_bids) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
 
 df_agg <- left_join(df_agg_filtered, df_agg)
+
+# clean away extreme values of altrd
+df_agg <- df_agg %>% filter(altrd < 10)
 ```
 
 ## Apply model
@@ -168,24 +171,71 @@ dist_cat3 <- plot_dist(df_classified, 3)
 dist_cat1 / dist_cat2 / dist_cat3 + 
   labs(caption = "Red indicates predicted status is cartel", x = "Date")
 
+kstest_contract <- function(df, type){
+  x <- df %>% filter(pos == 1) %>% filter(contract_type == type) %>% select(date)
+  y <- df %>% filter(pos == 0) %>% filter(contract_type == type) %>% select(date)
+  x <- x$date
+  y <- y$date
+  ks.test(x, y)
+}
 
-df_classified %>% filter(contract_type == 2) %>%
-  ggplot(aes(x = date, after_stat(count),color = as.factor(pos), fill = as.factor(pos))) +
-  geom_density(alpha = 0.6, show.legend = FALSE, trim = FALSE, adjust = 0.5, position = "fill")+
-    scale_color_manual(values=c("skyblue", "coral")) +
-    scale_fill_manual(values=c("skyblue", "coral")) +
-    theme_minimal() + labs(x = "")
-
-
+# Test whether events deemed fair respecitve collusive occur at different points in time
+kstest_contract(df_classified, 1)
+kstest_contract(df_classified, 2)
+kstest_contract(df_classified, 3)
 ```
 
+
+# Clustering algorithm
+The idea is to cluster our observations into two categories which we then match with predictions made using the ML algorithm. If there is a strong correlation between the two, there is evidence of two clear groups and we might be able to discern a pattern.
+```{r}
+df_cluster <- df_agg  %>% 
+  select(probability_collusion, contract_type, CV, altrd, kurt, skew,  procedure) %>% mutate(procedure = if_else(procedure == "Offenes", 1, 0))
+
+cluster_type <- function(df, type){
+  df <- df %>% filter(contract_type %in% type) %>% na.omit()
+  df2 <- df %>% select(-c(probability_collusion)) %>% 
+  scale() %>% as_tibble()
+
+  clusters <- kmeans(df2[,2:length(df2)], 2, nstart = 25)
+  df2$cluster <- as.factor(clusters$cluster)
+  
+  df2 <- df2 %>% mutate(cluster1 = if_else(cluster == "1", 1, 0))
+  df$cluster <- df2$cluster
+  print(cor(as.integer(df$cluster), df$probability_collusion))
+  return(df)
+}
+
+get_pc <- function(df, type){
+  df <- cluster_type(df, type)
+  df_pca <- df %>% select(-c(probability_collusion, contract_type, cluster))
+  pca_stats <- prcomp(x = df_pca)
+  pca_stats$scores <- as.matrix(df_pca) %*% pca_stats$rotation
+  PCs_stats <- pca_stats$scores[, 1:3]
+  df$PCA1 <- pca_stats$scores[, 1]
+  df$PCA2 <- pca_stats$scores[, 3]
+  return(df)
+}
+
+
+df_pca1 <- get_pc(df_cluster, c(1,2,3))
+df_pca2 <- get_pc(df_cluster, 2)
+df_pca3 <- get_pc(df_cluster, 3)
+
+df_pca3 %>% ggplot(aes(x = PCA1, y =probability_collusion, color =  cluster)) + geom_point()
+df_pca1 %>% ggplot(aes(x = PCA1, y =PCA2, color =  probability_collusion > dc)) + geom_point()
+
+```
 
 
 ```{r filter_data}
 # Filter data based on the first behavioural screen
 # TODO: probably not so smart to filter away those identified as not collusive after all
-df_agg_ml <- df_agg %>% filter(probability_collusion > dc) 
+df_agg_ml <- df_agg# %>% filter(probability_collusion > dc) 
+
 ```
+
+
 
 # Second behavioural screen Time series for structural breaks
 Afer meeting. Do a structural break which provides further evidence. Improtant to invclude as further evidence.
@@ -194,9 +244,11 @@ Idea is to identify break points in one metric and then use a Chow test to test 
 
 ```{r create_sb_data}
 df_sb <- right_join(df, df_agg_ml, by = c("project" = "project")) %>% as_tibble()
+
 df_sb <- df_sb %>% select(-c("contract_type.x", "procedure.x")) %>% 
-  rename(contract_type = contract_type.y,
-         procedure = procedure.y)
+  rename(contract_type = contract_type.y, procedure = procedure.y)
+
+# Form variables at the contract type level
 df_sb %>% group_by(contract_type) %>% 
   mutate(mean_CV = mean(CV),
          CV_stand = (CV - mean_CV)/mean_CV,
@@ -204,24 +256,35 @@ df_sb %>% group_by(contract_type) %>%
          altrd_stand = (altrd - mean_altrd) / mean_altrd) %>% 
   ungroup() %>% na.omit() -> df_sb
 
+# Group data by project 
 df_sb %>% group_by(project, anonymiseddate) %>% 
   summarise(CV_stand = first(CV_stand), 
             contract_type = first(contract_type),
             probability_collusion = first(probability_collusion),
-            altrd = first(altrd)) %>% 
+            altrd = first(altrd),
+            rd = first(rd)) %>% 
   ungroup() -> df_sb
 ```
 
 
 ```{r structural_breaks}
 # builds upon section 6.1.2 in Bucirossi's handbook
-df_sb %>%
+
+struc_break <- function(df, type){
+  df %>% filter(contract_type == type) %>%
   ggplot(aes(x = anonymiseddate, y = CV_stand, color = as.factor(contract_type)), alpha = 1) +
   geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
   theme_minimal() + 
   scale_colour_brewer(palette = "Accent") +
   scale_fill_brewer(palette = "Accent") +
-  labs(title = "Changes in collusive measure over time")
+  labs(title = "Changes in collusive measure over time") +
+  geom_point(aes(color = rd > 1))
+}
+
+struc_break(df_sb, 1)
+struc_break(df_sb, 2)
+struc_break(df_sb, 3)
+
 ```
 
 ```{r get_break_points}
@@ -237,6 +300,7 @@ min_cv <- c()
 argmax_cv <- c()
 argmin_cv <- c()
 
+# Get break points for each category type
 for(ix in 1:3){
   df_tmp <- df_sb %>% filter(contract_type == ix)
   Y_tmp <- df_tmp$CV_stand
@@ -246,20 +310,25 @@ for(ix in 1:3){
   argmax_cv[ix] <- loess_argmax(Y_tmp, X_tmp)
   argmin_cv[ix] <- loess_argmax(-Y_tmp, X_tmp)
 }
+```
 
+```{r plot_bp}
 df_sb %>%
   ggplot(aes(x = anonymiseddate, y = altrd, color = as.factor(contract_type)), alpha = 1) +
   geom_vline(aes(xintercept = argmin_cv[3]), 
              linetype="dotted", size=1.5, color = "orange", alpha = 0.8)+
   geom_vline(aes(xintercept = argmax_cv[2]), 
              linetype="dotted", size=1.5, color = "purple", alpha = 0.5) +
+  geom_vline(aes(xintercept = argmin_cv[1]), 
+             linetype="dotted", size=1.5, color = "darkgreen", alpha = 0.5) +
+geom_vline(aes(xintercept = argmax_cv[1]), 
+             linetype="dotted", size=1.5, color = "darkgreen", alpha = 0.5) +
   geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
   theme_minimal() + 
   scale_colour_brewer(palette = "Accent") +
   scale_fill_brewer(palette = "Accent") +
   labs(title = "Structural break?",
        subtitle = "lines indicate structural break candidate values")
-
 ```
 
 
