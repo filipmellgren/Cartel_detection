@@ -20,7 +20,6 @@ df <- rio::import("Data_Buehler_Wallimann.xlsx")
 # First behavoural screen
 ## Set parameters
 ```{r}
-# Use 0.7 as decision criteria
 dc <- 0.7
 ```
 
@@ -107,43 +106,57 @@ df_agg %>% ggplot(aes(x=probability_collusion, y=log(win_bid), z = exp_harm, col
 # Data from ML paper fig 3 and Oscars eye balling skills
 TP <- c(1, 0.91, 0.85, 0.77, 0.64, 0.38)
 TN <- c(0, 0.69, 0.78, 0.86, 0.91, 0.97)
-FP <- 1 - TP
-FN <- 1 - TN
+FP <- 1 - TN
+FN <- 1 - TP
 dc_vec <- c(0, 0.5, 0.6, 0.7, 0.8, 0.9)
 certainty_info <- cbind(dc_vec, TP, TN, FP, FN) %>% as_tibble()
 
 # TODO: ok to have varying decision criteria?
-df_agg <- df_agg %>% mutate(floor_p_col = floor(probability_collusion * 10)/10,
-                           floor_p_col = if_else(floor_p_col < 0.5, 0, floor_p_col))
+#df_agg <- df_agg %>% mutate(floor_p_col = floor(probability_collusion * 10)/10,
+#                           floor_p_col = if_else(floor_p_col < 0.5, 0, floor_p_col))
+df_agg <- df_agg %>% mutate(pred_cartel = if_else(probability_collusion > dc, 1, 0))
 
-df_agg <- left_join(df_agg, certainty_info, by = c("floor_p_col" = "dc_vec"))
+#df_agg <- left_join(df_agg, certainty_info, by = c("floor_p_col" = "dc_vec"))
 
-df_agg <- df_agg %>% mutate(precision = TP / (TP + FP),
-                  recall = TP / (TP + FN))
+#df_agg <- df_agg %>% mutate(precision = TP / (TP + FP),
+#                  recall = TP / (TP + FN))
 ```
 
 ```{r confusion_matrix}
-dc_ix <- 4
-num_pos <- df_agg %>% filter(probability_collusion >= dc) %>% nrow()
-num_neg <- df_agg %>% filter(probability_collusion < dc) %>% nrow()
+dc_ix <- which(dc_vec == dc)
+num_cartel_pred <- df_agg %>% filter(probability_collusion >= dc) %>% nrow()
+num_fair_pred <- df_agg %>% filter(probability_collusion < dc) %>% nrow()
+# Solve for number of actual cartels (basic algebra)
+
+numerator <-  TP[[dc_ix]] * num_fair_pred - FN[[dc_ix]] * num_cartel_pred
+denom <- TP[[dc_ix]] * TN[[dc_ix]] - FN[[dc_ix]] * FP[[dc_ix]]
+
+num_fair_actual <- numerator/(denom)
+
+num_cartel_actual = df_agg %>% nrow() - num_fair_actual
+
+# Prepare data
 conf_actual <- c("Cartel", "Fair")
 conf_pred <- c("Cartel", "Fair")
 conf_mat <- expand.grid(X=conf_pred, Y=conf_actual)
-conf_mat$conf_data <- c(TP[[dc_ix]] * num_pos , FN[[dc_ix]] * num_pos, 
-                        FP[[dc_ix]] * num_neg, TN[[dc_ix]]*num_neg)
+conf_mat$conf_data <- c(TP[[dc_ix]] * num_cartel_actual , FN[[dc_ix]]* num_cartel_actual, 
+                        FP[[dc_ix]] * num_fair_actual , TN[[dc_ix]]*num_fair_actual)
 conf_mat$colors <- c(0,1,1,0)
 
+# Plot the confusion matrix
 conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
   geom_tile(aes(fill = colors)) + 
   labs(title = "Model accuracy",
        y = "Actual cartel status", x = "Predicted cartel status",
-       subtitle  = "Figure shows expected number of tenders in each category \nTotal number of tenders classified: 3882") + 
+       subtitle  = "Figure shows expected number of tenders in each category \nTotal number of tenders classified: 3685") + 
   theme_minimal() +
   geom_text(aes(label = round(conf_data, 2)),size = 8, color = "white") +
  # scale_fill_distiller(palette = "RdYlGn", values = c(-0.4, 1.4)) +
   scale_fill_gradient2(low = "skyblue", high = "coral", mid = "white", 
    midpoint = 0.5, limit = c(0,1.2), space = "Lab", 
-    name="")
+    name="") +
+  theme(legend.position = "none")
+ggsave("images/confmat.png")
 ```
 ## Plot densities of occurences.
 
@@ -154,19 +167,21 @@ df_classified <- df_agg %>% na.omit() %>%
          pos2 = pos) %>%
   unite(col = "dens_cat", c(pos2, contr_type ))
 
-
-plot_dist <- function(data, contract){
+plot_dist <- function(data, contract, category_name){
   data %>% filter(contract_type == contract) %>%
   ggplot(aes(x = date, color = as.factor(pos), fill = as.factor(pos))) +
-  geom_density(alpha = 0.6, show.legend = FALSE, trim = FALSE, adjust = 0.75) +
+  geom_density(alpha = 0.6, show.legend = FALSE, trim = FALSE, adjust = 0.6) +
+    geom_rug(data = data %>% filter(pos == 1, contract_type == contract)) +
     scale_color_manual(values=c("skyblue", "coral")) +
     scale_fill_manual(values=c("skyblue", "coral")) +
-    theme_minimal() + labs(x = "")
+    theme_minimal() + labs(x = "") +
+    theme(legend.position = "None") +
+    labs(title = category_name)
 }
 
-dist_cat1 <- plot_dist(df_classified, 1)
-dist_cat2 <- plot_dist(df_classified, 2)
-dist_cat3 <- plot_dist(df_classified, 3)
+dist_cat1 <- plot_dist(df_classified, 1, "Strassenbau")
+dist_cat2 <- plot_dist(df_classified, 2, "Strassen und Tiefbau")
+dist_cat3 <- plot_dist(df_classified, 3, "Tiefbau")
 
 dist_cat1 / dist_cat2 / dist_cat3 + 
   labs(caption = "Red indicates predicted status is cartel", x = "Date")
@@ -183,61 +198,17 @@ kstest_contract <- function(df, type){
 kstest_contract(df_classified, 1)
 kstest_contract(df_classified, 2)
 kstest_contract(df_classified, 3)
+ggsave("images/densities.png")
 ```
 
 
-# Clustering algorithm
-The idea is to cluster our observations into two categories which we then match with predictions made using the ML algorithm. If there is a strong correlation between the two, there is evidence of two clear groups and we might be able to discern a pattern.
-```{r}
-df_cluster <- df_agg  %>% 
-  select(probability_collusion, contract_type, CV, altrd, kurt, skew,  procedure) %>% mutate(procedure = if_else(procedure == "Offenes", 1, 0))
-
-cluster_type <- function(df, type){
-  df <- df %>% filter(contract_type %in% type) %>% na.omit()
-  df2 <- df %>% select(-c(probability_collusion)) %>% 
-  scale() %>% as_tibble()
-
-  clusters <- kmeans(df2[,2:length(df2)], 2, nstart = 25)
-  df2$cluster <- as.factor(clusters$cluster)
-  
-  df2 <- df2 %>% mutate(cluster1 = if_else(cluster == "1", 1, 0))
-  df$cluster <- df2$cluster
-  print(cor(as.integer(df$cluster), df$probability_collusion))
-  return(df)
-}
-
-get_pc <- function(df, type){
-  df <- cluster_type(df, type)
-  df_pca <- df %>% select(-c(probability_collusion, contract_type, cluster))
-  pca_stats <- prcomp(x = df_pca)
-  pca_stats$scores <- as.matrix(df_pca) %*% pca_stats$rotation
-  PCs_stats <- pca_stats$scores[, 1:3]
-  df$PCA1 <- pca_stats$scores[, 1]
-  df$PCA2 <- pca_stats$scores[, 3]
-  return(df)
-}
-
-
-df_pca1 <- get_pc(df_cluster, c(1,2,3))
-df_pca2 <- get_pc(df_cluster, 2)
-df_pca3 <- get_pc(df_cluster, 3)
-
-df_pca3 %>% ggplot(aes(x = PCA1, y =probability_collusion, color =  cluster)) + geom_point()
-df_pca1 %>% ggplot(aes(x = PCA1, y =PCA2, color =  probability_collusion > dc)) + geom_point()
-
-```
-
-
+# Second behavioural screen Time series for structural breaks
 ```{r filter_data}
 # Filter data based on the first behavioural screen
 # TODO: probably not so smart to filter away those identified as not collusive after all
 df_agg_ml <- df_agg# %>% filter(probability_collusion > dc) 
 
 ```
-
-
-
-# Second behavioural screen Time series for structural breaks
 Afer meeting. Do a structural break which provides further evidence. Improtant to invclude as further evidence.
 
 Idea is to identify break points in one metric and then use a Chow test to test for structural breaks in another important statistic.
@@ -361,4 +332,74 @@ Also, Difference between the two lowest bids divided by the standard deviation o
 
 Descriptive statistics, by type:
 Procedure type (var, mean, bids)
+
+
+
+
+# Clustering algorithm
+The idea is to cluster our observations into two categories which we then match with predictions made using the ML algorithm. If there is a strong correlation between the two, there is evidence of two clear groups and we might be able to discern a pattern.
+```{r}
+df_cluster <- df_agg  %>% 
+  select(probability_collusion, contract_type, CV, altrd, kurt, skew,  procedure) %>% mutate(procedure = if_else(procedure == "Offenes", 1, 0))
+
+cluster_type <- function(df, type){
+  df <- df %>% filter(contract_type %in% type) %>% na.omit()
+  df2 <- df %>% select(-c(probability_collusion)) %>% 
+  scale() %>% as_tibble()
+
+  clusters <- kmeans(df2[,2:length(df2)], 2, nstart = 25)
+  df2$cluster <- as.factor(clusters$cluster)
+  
+  df2 <- df2 %>% mutate(cluster1 = if_else(cluster == "1", 1, 0))
+  df$cluster <- df2$cluster
+  print(cor(as.integer(df$cluster), df$probability_collusion))
+  return(df)
+}
+
+get_pc <- function(df, type){
+  df <- cluster_type(df, type)
+  df_pca <- df %>% select(-c(probability_collusion, contract_type, cluster))
+  pca_stats <- prcomp(x = df_pca)
+  pca_stats$scores <- as.matrix(df_pca) %*% pca_stats$rotation
+  PCs_stats <- pca_stats$scores[, 1:3]
+  df$PCA1 <- pca_stats$scores[, 1]
+  df$PCA2 <- pca_stats$scores[, 3]
+  return(df)
+}
+
+
+df_pca1 <- get_pc(df_cluster, c(1,2,3))
+df_pca2 <- get_pc(df_cluster, 2)
+df_pca3 <- get_pc(df_cluster, 3)
+
+df_pca3 %>% ggplot(aes(x = PCA1, y =probability_collusion, color =  cluster)) + geom_point()
+df_pca1 %>% ggplot(aes(x = PCA1, y =PCA2, color =  probability_collusion > dc)) + geom_point()
+
+```
+
+
+```{r}
+library(RSSL)
+
+X_lab <- df_agg %>% na.omit() %>%
+  filter(probability_collusion > 0.8 | probability_collusion < 0.1) %>% 
+  select(CV, altrd2, project)
+
+y_lab <- df_agg %>% na.omit() %>% 
+  filter(probability_collusion > 0.8 | probability_collusion < 0.1) %>% 
+  select(probability_collusion, project) %>% 
+  mutate(cartel = if_else(probability_collusion > 0.8, 0, 1),
+         cartel = as.factor(cartel)) %>% select(cartel, project, probability_collusion)
+
+X <- df_agg %>% filter(probability_collusion <= 0.8 & probability_collusion >= 0.1) %>% select(CV, altrd2, project, probability_collusion) %>% na.omit()
+
+m1 <- EMLeastSquaresClassifier(as.data.frame(X_lab %>% select(-project)), y_lab$cartel, as.data.frame(X %>% select(-c(project, probability_collusion))))
+
+X$preds2 <- m1@responsibilities
+
+dat_lab <- left_join(X_lab, y_lab)
+new_df <- bind_rows(dat_lab, X)
+
+new_df %>% ggplot(aes(x = probability_collusion, y = preds2)) + geom_point()
+```
 
