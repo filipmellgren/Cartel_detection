@@ -27,6 +27,9 @@ dc <- 0.7
 These statistics are based on those in the ML paper.
 
 ```{r, include = FALSE}
+# How many projects are there in the data set?
+df %>% distinct(project) %>% nrow() # 4434
+
 # Create statistics used for behavioral screening 
 # Note, formula (6) for altrd MIGHT be wrong in the paper. Implemented with wrong sign.
 df %>% arrange(project, bid) %>% group_by(project) %>% 
@@ -54,12 +57,16 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
     kurt = kurt - 3 * (no_bids - 1)^3 / ((no_bids - 2) * no_bids - 3),
     skew = skew * no_bids / ( (no_bids - 1) * (no_bids -2) )
     ) -> df_agg
+
+# Did any project dissapear?
+df_agg %>% distinct(project) %>% nrow() # 4434
 ```
 
 ```{r cleaning}
 # TODO: find a plan for how to deal with the drop in observations.
+# NOTE that man y observations dissapear here
 # Lost observations due to missings: 4434 - 3882 = 552
-df_agg %>% select(project, CV, altrd, no_bids) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
+df_agg %>% select(project, CV, no_bids) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
 
 df_agg <- left_join(df_agg_filtered, df_agg)
 
@@ -187,11 +194,16 @@ dist_cat1 / dist_cat2 / dist_cat3 +
   labs(caption = "Red indicates predicted status is cartel", x = "Date")
 
 kstest_contract <- function(df, type){
+  # Tests whether data can be said to come from a uniform distribution in the 
+  # interval of the data
+  # TODO: should we change interval to 0 and whatever max we have?
   x <- df %>% filter(pos == 1) %>% filter(contract_type == type) %>% select(date)
   y <- df %>% filter(pos == 0) %>% filter(contract_type == type) %>% select(date)
   x <- x$date
   y <- y$date
-  ks.test(x, y)
+  low <- min(min(x), min(y))
+  high <- max(max(x), max(y))
+  ks.test(x, "punif",low, high)
 }
 
 # Test whether events deemed fair respecitve collusive occur at different points in time
@@ -199,6 +211,15 @@ kstest_contract(df_classified, 1)
 kstest_contract(df_classified, 2)
 kstest_contract(df_classified, 3)
 ggsave("images/densities.png")
+```
+
+```{r}
+df_agg %>% na.omit() %>% 
+  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
+  summarise(avg_cv = mean(CV)) %>%
+  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
+  geom_line() +
+  theme_minimal()
 ```
 
 
@@ -416,5 +437,36 @@ dat_lab <- left_join(X_lab, y_lab)
 new_df <- bind_rows(dat_lab, X)
 
 new_df %>% ggplot(aes(x = probability_collusion, y = preds2)) + geom_point()
+```
+```{r}
+df %>% arrange(project, bid) %>% group_by(project) %>%
+  summarise(
+    sdev_bid = sqrt(var(bid)), # NOTE: empirical or pop std dev?
+    mean_bid = mean(bid),
+    date = first(anonymiseddate),
+    contract_type = first(contract_type)) %>%
+  mutate(
+    CV = sdev_bid / mean_bid
+    ) -> df_agg2 
+
+df_agg2 -> y
+df_agg %>% select(project, sdev_bid, mean_bid, date, contract_type, CV) -> x
+
+# TDOO: weird that select changes what gets plotted
+df_agg %>% select(project, date, contract_type, CV) %>%
+  na.omit() %>% 
+  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
+  summarise(avg_cv = mean(CV)) %>%
+  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
+  geom_line() +
+  theme_minimal()
+
+df_agg %>%
+  na.omit() %>% 
+  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
+  summarise(avg_cv = mean(CV)) %>%
+  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
+  geom_line() +
+  theme_minimal()
 ```
 
