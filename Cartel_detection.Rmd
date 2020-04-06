@@ -36,11 +36,12 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
    mutate(
      pairwise_diff = bid - lag(bid, order_by=bid)) %>%
   summarise(
-    sdev_bid = sqrt(var(bid)), # NOTE: empirical or pop std dev?
     mean_bid = mean(bid), 
     no_bids = n(),
+    sdev_bid = sqrt(var(bid)*(no_bids-1)/(no_bids)), # NOTE: var() defaults t0 denom n-1, want n.
     win_bid = min(bid),
     date = first(anonymiseddate), 
+    year = first(anonymisedyear), 
     contract_type = first(contract_type), 
     procedure = first(procedure),
     diff = min(bid[bid!=min(bid)]) - min(bid),
@@ -118,29 +119,13 @@ FN <- 1 - TP
 dc_vec <- c(0, 0.5, 0.6, 0.7, 0.8, 0.9)
 certainty_info <- cbind(dc_vec, TP, TN, FP, FN) %>% as_tibble()
 
-# TODO: ok to have varying decision criteria?
-#df_agg <- df_agg %>% mutate(floor_p_col = floor(probability_collusion * 10)/10,
-#                           floor_p_col = if_else(floor_p_col < 0.5, 0, floor_p_col))
 df_agg <- df_agg %>% mutate(pred_cartel = if_else(probability_collusion > dc, 1, 0))
-
-#df_agg <- left_join(df_agg, certainty_info, by = c("floor_p_col" = "dc_vec"))
-
-#df_agg <- df_agg %>% mutate(precision = TP / (TP + FP),
-#                  recall = TP / (TP + FN))
 ```
 
 ```{r confusion_matrix}
 dc_ix <- which(dc_vec == dc)
 num_cartel_pred <- df_agg %>% filter(probability_collusion >= dc) %>% nrow()
 num_fair_pred <- df_agg %>% filter(probability_collusion < dc) %>% nrow()
-# Solve for number of actual cartels (basic algebra)
-
-numerator <-  TP[[dc_ix]] * num_fair_pred - FN[[dc_ix]] * num_cartel_pred
-denom <- TP[[dc_ix]] * TN[[dc_ix]] - FN[[dc_ix]] * FP[[dc_ix]]
-
-num_fair_actual <- numerator/(denom)
-
-num_cartel_actual = df_agg %>% nrow() - num_fair_actual
 
 # Prepare data
 conf_actual <- c("Cartel", "Fair")
@@ -175,6 +160,7 @@ df_classified <- df_agg %>% na.omit() %>%
   unite(col = "dens_cat", c(pos2, contr_type ))
 
 plot_dist <- function(data, contract, category_name){
+  # TODO: at what date does year 1 begin?
   data %>% filter(contract_type %in% contract) %>%
   ggplot(aes(x = date, color = as.factor(pos), fill = as.factor(pos))) +
   geom_histogram(alpha = 0.6, show.legend = FALSE,  binwidth = 365, position = "fill") +
@@ -183,7 +169,7 @@ plot_dist <- function(data, contract, category_name){
     scale_fill_manual(values=c("skyblue", "coral")) +
     theme_minimal() + labs(x = "") +
     theme(legend.position = "None") +
-    labs(title = category_name)
+    labs(title = category_name, y = "Fraction")
 }
 
 dist_cat1 <- plot_dist(df_classified, 1, "Strassenbau")
@@ -214,22 +200,37 @@ ggsave("images/densities.png")
 ```
 
 ```{r}
-df_agg %>% na.omit() %>% 
-  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
+df_agg %>% select(project, year, contract_type, CV) %>% na.omit() %>% 
+  group_by(year, contract_type) %>% 
   summarise(avg_cv = mean(CV)) %>%
   ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
   geom_line() +
-  theme_minimal()
+  theme_minimal() +
+  scale_color_discrete(name = "Contract type", labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
+  labs(y = "Yearly Mean Coeff. of Variation", x = "Year", title = "Cartels are more likely marked by low values")
+
+ggsave("images/CV_year.png")
+```
+
+# Plot CV over time
+```{r}
+str_cv <- df_agg %>% filter(contract_type == 1) %>% 
+  ggplot(aes(x = date, y = CV)) +
+  geom_point()
+
+mix_cv <- df_agg %>% filter(contract_type == 2) %>% 
+  ggplot(aes(x = date, y = CV)) +
+  geom_point()
+
+tief_cv <- df_agg %>% filter(contract_type == 3) %>% 
+  ggplot(aes(x = date, y = CV)) +
+  geom_point()
+
+str_cv/mix_cv/tief_cv
 ```
 
 
 # Second behavioural screen Time series for structural breaks
-```{r filter_data}
-# Filter data based on the first behavioural screen
-# TODO: probably not so smart to filter away those identified as not collusive after all
-df_agg_ml <- df_agg# %>% filter(probability_collusion > dc) 
-
-```
 Afer meeting. Do a structural break which provides further evidence. Improtant to invclude as further evidence.
 
 Idea is to identify break points in one metric and then use a Chow test to test for structural breaks in another important statistic.
@@ -239,44 +240,6 @@ df_sb <- right_join(df, df_agg_ml, by = c("project" = "project")) %>% as_tibble(
 
 df_sb <- df_sb %>% select(-c("contract_type.x", "procedure.x")) %>% 
   rename(contract_type = contract_type.y, procedure = procedure.y)
-
-# Form variables at the contract type level
-df_sb %>% group_by(contract_type) %>% 
-  mutate(mean_CV = mean(CV),
-         CV_stand = (CV - mean_CV)/mean_CV,
-         mean_altrd = mean(altrd),
-         altrd_stand = (altrd - mean_altrd) / mean_altrd) %>% 
-  ungroup() %>% na.omit() -> df_sb
-
-# Group data by project 
-df_sb %>% group_by(project, anonymiseddate) %>% 
-  summarise(CV_stand = first(CV_stand), 
-            contract_type = first(contract_type),
-            probability_collusion = first(probability_collusion),
-            altrd = first(altrd),
-            rd = first(rd)) %>% 
-  ungroup() -> df_sb
-```
-
-
-```{r structural_breaks}
-# builds upon section 6.1.2 in Bucirossi's handbook
-
-struc_break <- function(df, type){
-  df %>% filter(contract_type == type) %>%
-  ggplot(aes(x = anonymiseddate, y = CV_stand, color = as.factor(contract_type)), alpha = 1) +
-  geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
-  theme_minimal() + 
-  scale_colour_brewer(palette = "Accent") +
-  scale_fill_brewer(palette = "Accent") +
-  labs(title = "Changes in collusive measure over time") +
-  geom_point(aes(color = rd > 1))
-}
-
-struc_break(df_sb, 1)
-struc_break(df_sb, 2)
-struc_break(df_sb, 3)
-
 ```
 
 ```{r get_break_points}
@@ -294,9 +257,9 @@ argmin_cv <- c()
 
 # Get break points for each category type
 for(ix in 1:3){
-  df_tmp <- df_sb %>% filter(contract_type == ix)
-  Y_tmp <- df_tmp$CV_stand
-  X_tmp <- df_tmp$anonymiseddate
+  df_tmp <- df_agg %>% filter(contract_type == ix)
+  Y_tmp <- df_tmp$CV
+  X_tmp <- df_tmp$date
   max_cv[ix] <- loess_max(Y_tmp, X_tmp)
   min_cv[ix] <- loess_max(-Y_tmp, X_tmp)
   argmax_cv[ix] <- loess_argmax(Y_tmp, X_tmp)
@@ -304,62 +267,61 @@ for(ix in 1:3){
 }
 ```
 
-```{r plot_bp}
-df_sb %>%
-  ggplot(aes(x = anonymiseddate, y = altrd, color = as.factor(contract_type)), alpha = 1) +
-  geom_vline(aes(xintercept = argmin_cv[3]), 
-             linetype="dotted", size=1.5, color = "orange", alpha = 0.8)+
-  geom_vline(aes(xintercept = argmax_cv[2]), 
-             linetype="dotted", size=1.5, color = "purple", alpha = 0.5) +
-  geom_vline(aes(xintercept = argmin_cv[1]), 
-             linetype="dotted", size=1.5, color = "darkgreen", alpha = 0.5) +
-geom_vline(aes(xintercept = argmax_cv[1]), 
-             linetype="dotted", size=1.5, color = "darkgreen", alpha = 0.5) +
+```{r structural_breaks}
+# builds upon section 6.1.2 in Bucirossi's handbook
+
+struc_break <- function(df){
+  df %>%
+  ggplot(aes(x = date, y = CV, color = as.factor(contract_type)), alpha = 1) +
   geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
   theme_minimal() + 
-  scale_colour_brewer(palette = "Accent") +
-  scale_fill_brewer(palette = "Accent") +
+  labs(title = "title")+
+    geom_vline(aes(xintercept = argmin_cv[1]), 
+             linetype="dotted", size=1.5, color = "red", alpha = 0.5)
+}
+
+CV_time <- struc_break(df_agg)
+```
+
+```{r plot_bp}
+prob_col_time <- df_agg %>%
+  ggplot(aes(x = date, y = probability_collusion, color = as.factor(contract_type)), alpha = 1) +
+geom_vline(aes(xintercept = argmin_cv[1]), 
+             linetype="dotted", size=1.5, color = "red", alpha = 0.5) +
+  geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
+  theme_minimal() + 
   labs(title = "Structural break?",
        subtitle = "lines indicate structural break candidate values")
 ```
 
+
+```{r}
+CV_time/prob_col_time
+```
+
+
 ```{r Chow}
+# TODO: Shouldnt probability of collusion DECREASE when CV increase?
 library(strucchange)
 chow_test <- function(df, type, bp){
   df <- df %>% filter(contract_type == type)
-  sc <- sctest(df_sb$altrd ~ df_sb$anonymiseddate, type = "Chow", point = bp)
+  sc <- sctest(df$probability_collusion ~ df$date, type = "Chow", point = bp)
   return(sc)
 }
 
-bpoint <- which(df_sb$anonymiseddate == argmax_cv[2])
-chow_test(df_sb, 2, bpoint)
+# Break point for series one
+type <- 2
+bpoint <- which(df_agg$date == argmin_cv[type])
+chow_test(df_agg, type, bpoint[1])
 
 ```
 
 
 
 
-```{r}
-df_sb %>% group_by(project, anonymiseddate) %>% 
-  summarise(altrd_stand = first(altrd_stand), contract_type = first(contract_type)) %>% 
-  ungroup() %>%
-  ggplot(aes(x = anonymiseddate, y = altrd_stand, color = as.factor(contract_type)), alpha = 1) +
-  geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
-  theme_minimal() + 
-  scale_colour_brewer(palette = "Accent") +
-  scale_fill_brewer(palette = "Accent") +
-  labs(title = "Changes in collusive measure over time")
 
-df_sb %>% group_by(project, anonymiseddate) %>% 
-  summarise(probability_collusion = first(probability_collusion), contract_type = first(contract_type)) %>% 
-  ungroup() %>%
-  ggplot(aes(x = anonymiseddate, y = probability_collusion, color = as.factor(contract_type)), alpha = 1) +
-  geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
-  theme_minimal() + 
-  scale_colour_brewer(palette = "Accent") +
-  scale_fill_brewer(palette = "Accent") +
-  labs(title = "Changes in collusive measure over time")
-```
+
+
 
 
 Find markers from OECD summary, look at CV, when it is low, there is an increased likelihood of a cartel. 
@@ -368,105 +330,3 @@ Also, Difference between the two lowest bids divided by the standard deviation o
 
 Descriptive statistics, by type:
 Procedure type (var, mean, bids)
-
-
-
-
-# Clustering algorithm
-The idea is to cluster our observations into two categories which we then match with predictions made using the ML algorithm. If there is a strong correlation between the two, there is evidence of two clear groups and we might be able to discern a pattern.
-```{r}
-df_cluster <- df_agg  %>% 
-  select(probability_collusion, contract_type, CV, altrd, kurt, skew,  procedure) %>% mutate(procedure = if_else(procedure == "Offenes", 1, 0))
-
-cluster_type <- function(df, type){
-  df <- df %>% filter(contract_type %in% type) %>% na.omit()
-  df2 <- df %>% select(-c(probability_collusion)) %>% 
-  scale() %>% as_tibble()
-
-  clusters <- kmeans(df2[,2:length(df2)], 2, nstart = 25)
-  df2$cluster <- as.factor(clusters$cluster)
-  
-  df2 <- df2 %>% mutate(cluster1 = if_else(cluster == "1", 1, 0))
-  df$cluster <- df2$cluster
-  print(cor(as.integer(df$cluster), df$probability_collusion))
-  return(df)
-}
-
-get_pc <- function(df, type){
-  df <- cluster_type(df, type)
-  df_pca <- df %>% select(-c(probability_collusion, contract_type, cluster))
-  pca_stats <- prcomp(x = df_pca)
-  pca_stats$scores <- as.matrix(df_pca) %*% pca_stats$rotation
-  PCs_stats <- pca_stats$scores[, 1:3]
-  df$PCA1 <- pca_stats$scores[, 1]
-  df$PCA2 <- pca_stats$scores[, 3]
-  return(df)
-}
-
-
-df_pca1 <- get_pc(df_cluster, c(1,2,3))
-df_pca2 <- get_pc(df_cluster, 2)
-df_pca3 <- get_pc(df_cluster, 3)
-
-df_pca3 %>% ggplot(aes(x = PCA1, y =probability_collusion, color =  cluster)) + geom_point()
-df_pca1 %>% ggplot(aes(x = PCA1, y =PCA2, color =  probability_collusion > dc)) + geom_point()
-
-```
-
-
-```{r}
-library(RSSL)
-
-X_lab <- df_agg %>% na.omit() %>%
-  filter(probability_collusion > 0.8 | probability_collusion < 0.1) %>% 
-  select(CV, altrd2, project)
-
-y_lab <- df_agg %>% na.omit() %>% 
-  filter(probability_collusion > 0.8 | probability_collusion < 0.1) %>% 
-  select(probability_collusion, project) %>% 
-  mutate(cartel = if_else(probability_collusion > 0.8, 0, 1),
-         cartel = as.factor(cartel)) %>% select(cartel, project, probability_collusion)
-
-X <- df_agg %>% filter(probability_collusion <= 0.8 & probability_collusion >= 0.1) %>% select(CV, altrd2, project, probability_collusion) %>% na.omit()
-
-m1 <- EMLeastSquaresClassifier(as.data.frame(X_lab %>% select(-project)), y_lab$cartel, as.data.frame(X %>% select(-c(project, probability_collusion))))
-
-X$preds2 <- m1@responsibilities
-
-dat_lab <- left_join(X_lab, y_lab)
-new_df <- bind_rows(dat_lab, X)
-
-new_df %>% ggplot(aes(x = probability_collusion, y = preds2)) + geom_point()
-```
-```{r}
-df %>% arrange(project, bid) %>% group_by(project) %>%
-  summarise(
-    sdev_bid = sqrt(var(bid)), # NOTE: empirical or pop std dev?
-    mean_bid = mean(bid),
-    date = first(anonymiseddate),
-    contract_type = first(contract_type)) %>%
-  mutate(
-    CV = sdev_bid / mean_bid
-    ) -> df_agg2 
-
-df_agg2 -> y
-df_agg %>% select(project, sdev_bid, mean_bid, date, contract_type, CV) -> x
-
-# TDOO: weird that select changes what gets plotted
-df_agg %>% select(project, date, contract_type, CV) %>%
-  na.omit() %>% 
-  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
-  summarise(avg_cv = mean(CV)) %>%
-  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
-  geom_line() +
-  theme_minimal()
-
-df_agg %>%
-  na.omit() %>% 
-  mutate(year=floor(date/365)) %>% group_by(year, contract_type) %>% 
-  summarise(avg_cv = mean(CV)) %>%
-  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
-  geom_line() +
-  theme_minimal()
-```
-
