@@ -27,9 +27,6 @@ dc <- 0.7
 These statistics are based on those in the ML paper.
 
 ```{r, include = FALSE}
-# How many projects are there in the data set?
-df %>% distinct(project) %>% nrow() # 4434
-
 # Create statistics used for behavioral screening 
 # Note, formula (6) for altrd MIGHT be wrong in the paper. Implemented with wrong sign.
 df %>% arrange(project, bid) %>% group_by(project) %>% 
@@ -38,7 +35,7 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
   summarise(
     mean_bid = mean(bid), 
     no_bids = n(),
-    sdev_bid = sqrt(var(bid)*(no_bids-1)/(no_bids)), # NOTE: var() defaults t0 denom n-1, want n.
+    sdev_bid = sd(bid), # NOTE: sd() defaults t0 denom n-1, want n.
     win_bid = min(bid),
     date = first(anonymiseddate), 
     year = first(anonymisedyear), 
@@ -53,21 +50,32 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
     altrd2 = (no_bids - 1) * diff / (min(bid[bid!=min(bid)]) - max(bid)) # Equivalent magnitude (but takes reversed sign into account)
     ) %>%
   mutate(
-    CV = sdev_bid / mean_bid, 
+    CV = (sdev_bid / mean_bid) * sqrt((no_bids-1)/(no_bids)), 
     kurt = kurt * no_bids*(no_bids+1) / ((no_bids - 1)*(no_bids - 2)* (no_bids - 3)),
     kurt = kurt - 3 * (no_bids - 1)^3 / ((no_bids - 2) * no_bids - 3),
     skew = skew * no_bids / ( (no_bids - 1) * (no_bids -2) )
     ) -> df_agg
+```
 
-# Did any project dissapear?
-df_agg %>% distinct(project) %>% nrow() # 4434
+```{r manual_check}
+# Manual check that altrd calculation is correct
+# Project 3
+bid_3 <- c(141967.15, 144485.40, 132293.50)
+b1 <- min(bid_3)
+b2 <- min(bid_3[bid_3!=b1])
+b3 <- max(bid_3)
+
+altrd_manual <- (b2 - b1) / ( (b2 - b3) / 2)
+# compare with: -7.682835
+altrd_manual - -7.682835
+
 ```
 
 ```{r cleaning}
 # TODO: find a plan for how to deal with the drop in observations.
 # NOTE that man y observations dissapear here
 # Lost observations due to missings: 4434 - 3882 = 552
-df_agg %>% select(project, CV, no_bids) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
+df_agg %>% select(project, CV, no_bids, contract_type) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
 
 df_agg <- left_join(df_agg_filtered, df_agg)
 
@@ -86,7 +94,7 @@ m3 <- c(1.02, -0.49, 0.92, 0.09)
 m4 <- c(1.51, -0.47, 0.95, 0)
 names(m3) <- c("CONST", "CV", "ALTRD", "NoBIDS")
 names(m4) <- names(m3)
-model <- m3
+model <- m4
 
 df_agg %>%
   mutate(
@@ -164,7 +172,7 @@ plot_dist <- function(data, contract, category_name){
   data %>% filter(contract_type %in% contract) %>%
   ggplot(aes(x = date, color = as.factor(pos), fill = as.factor(pos))) +
   geom_histogram(alpha = 0.6, show.legend = FALSE,  binwidth = 365, position = "fill") +
-    geom_rug(data = data %>% filter(pos == 1, contract_type == contract)) +
+    geom_rug(data = data %>% filter(pos == 1, contract_type == contract), size = 2) +
     scale_color_manual(values=c("skyblue", "coral")) +
     scale_fill_manual(values=c("skyblue", "coral")) +
     theme_minimal() + labs(x = "") +
@@ -178,6 +186,7 @@ dist_cat3 <- plot_dist(df_classified, 3, "Tiefbau")
 
 dist_cat1 / dist_cat2 / dist_cat3 + 
   labs(caption = "Red indicates predicted status is cartel", x = "Date")
+ggsave("images/densities.png")
 
 kstest_contract <- function(df, type){
   # Tests whether data can be said to come from a uniform distribution in the 
@@ -196,11 +205,10 @@ kstest_contract <- function(df, type){
 kstest_contract(df_classified, 1)
 kstest_contract(df_classified, 2)
 kstest_contract(df_classified, 3)
-ggsave("images/densities.png")
 ```
 
 ```{r}
-df_agg %>% select(project, year, contract_type, CV) %>% na.omit() %>% 
+df_agg %>% select(project, year, contract_type, CV) %>% #na.omit() %>% 
   group_by(year, contract_type) %>% 
   summarise(avg_cv = mean(CV)) %>%
   ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
@@ -214,19 +222,19 @@ ggsave("images/CV_year.png")
 
 # Plot CV over time
 ```{r}
-str_cv <- df_agg %>% filter(contract_type == 1) %>% 
-  ggplot(aes(x = date, y = CV)) +
-  geom_point()
-
-mix_cv <- df_agg %>% filter(contract_type == 2) %>% 
-  ggplot(aes(x = date, y = CV)) +
-  geom_point()
-
-tief_cv <- df_agg %>% filter(contract_type == 3) %>% 
-  ggplot(aes(x = date, y = CV)) +
-  geom_point()
-
+plot_cv <- function(type){
+  df_agg %>% filter(contract_type == type) %>% 
+    ggplot(aes(x = date, y = CV)) +
+    theme_minimal() +
+    geom_point()
+}
+str_cv <- plot_cv(1)
+mix_cv <- plot_cv(2)
+tief_cv <- plot_cv(3)
 str_cv/mix_cv/tief_cv
+
+ggsave("images/CV_scatter.png")
+
 ```
 
 
@@ -234,13 +242,6 @@ str_cv/mix_cv/tief_cv
 Afer meeting. Do a structural break which provides further evidence. Improtant to invclude as further evidence.
 
 Idea is to identify break points in one metric and then use a Chow test to test for structural breaks in another important statistic.
-
-```{r create_sb_data}
-df_sb <- right_join(df, df_agg_ml, by = c("project" = "project")) %>% as_tibble()
-
-df_sb <- df_sb %>% select(-c("contract_type.x", "procedure.x")) %>% 
-  rename(contract_type = contract_type.y, procedure = procedure.y)
-```
 
 ```{r get_break_points}
 loess_max <- function(y,x){
@@ -277,7 +278,11 @@ struc_break <- function(df){
   theme_minimal() + 
   labs(title = "title")+
     geom_vline(aes(xintercept = argmin_cv[1]), 
-             linetype="dotted", size=1.5, color = "red", alpha = 0.5)
+             linetype="dotted", size=1.5, color = "red", alpha = 0.5) +
+        geom_vline(aes(xintercept = argmin_cv[2]), 
+             linetype="dotted", size=1.5, color = "green", alpha = 0.5) +
+        geom_vline(aes(xintercept = argmin_cv[3]), 
+             linetype="dotted", size=1.5, color = "blue", alpha = 0.5)
 }
 
 CV_time <- struc_break(df_agg)
@@ -285,9 +290,13 @@ CV_time <- struc_break(df_agg)
 
 ```{r plot_bp}
 prob_col_time <- df_agg %>%
-  ggplot(aes(x = date, y = probability_collusion, color = as.factor(contract_type)), alpha = 1) +
+  ggplot(aes(x = date, y = altrd2, color = as.factor(contract_type)), alpha = 1) +
 geom_vline(aes(xintercept = argmin_cv[1]), 
              linetype="dotted", size=1.5, color = "red", alpha = 0.5) +
+  geom_vline(aes(xintercept = argmin_cv[2]), 
+             linetype="dotted", size=1.5, color = "green", alpha = 0.5) +
+  geom_vline(aes(xintercept = argmin_cv[3]), 
+             linetype="dotted", size=1.5, color = "blue", alpha = 0.5) +
   geom_smooth(aes(fill = as.factor(contract_type)), alpha = 0.4) +
   theme_minimal() + 
   labs(title = "Structural break?",
@@ -296,7 +305,8 @@ geom_vline(aes(xintercept = argmin_cv[1]),
 
 
 ```{r}
-CV_time/prob_col_time
+CV_time
+prob_col_time
 ```
 
 
@@ -310,19 +320,21 @@ chow_test <- function(df, type, bp){
 }
 
 # Break point for series one
-type <- 2
+type <- 1
 bpoint <- which(df_agg$date == argmin_cv[type])
 chow_test(df_agg, type, bpoint[1])
 
+type <- 1
+bpoint <- which(df_agg$date == 1751)
+chow_test(df_agg, type, bpoint[1])
+
+type <- 3
+bpoint <- which(df_agg$date == argmin_cv[type])
+chow_test(df_agg, type, bpoint[1])
+
+
+
 ```
-
-
-
-
-
-
-
-
 
 Find markers from OECD summary, look at CV, when it is low, there is an increased likelihood of a cartel. 
 
