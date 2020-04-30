@@ -263,39 +263,80 @@ Also, Difference between the two lowest bids divided by the standard deviation o
 Descriptive statistics, by type:
 Procedure type (var, mean, bids)
 
-# Structural screen
 ```{r}
-box_plot <- function(df, type, color, type_name){
-  plot <- melt(df, id.var = c("contract_type", "year"), measure.vars = c("win_bid")) %>%
+box_plot <- function(df, variable, type, color, type_name, y_min, y_max, note){
+  plot <- melt(df, id.var = c("contract_type", "year"), measure.vars = c(variable)) %>%
     filter(contract_type == type) %>% 
     ggplot(aes(x = as.factor(year), y = value)) + 
     geom_boxplot(outlier.shape = NA, fill = color) + theme_minimal() +
-    labs(y = "", x = "Year", subtitle = type_name) +
-    ylim(0, 10^6) 
+    labs(y = "", x = "Year", subtitle = type_name, caption = note) + 
+    coord_cartesian(ylim = c(y_min, y_max))
   return(plot)
 }
+```
 
-box1 <- box_plot(df_agg, 1, "#f8766d", "Strassenbau")
-box2 <- box_plot(df_agg, 2, "#62B74E", "Strassen und Tiefbau")
-box3 <- box_plot(df_agg, 3, "#00b0f6", "Tiefbau")
+
+```{r}
+box1 <- box_plot(df_agg, "CV", 1, "#f8766d", "Strassenbau", 0, 40, " ")
+box2 <- box_plot(df_agg, "CV", 2, "#62B74E", "Strassen und Tiefbau", 0, 40, " ")
+box3 <- box_plot(df_agg, "CV", 3, "#00b0f6", "Tiefbau", 0, 40, "Note: Outliers are hidden")
+
+box1 + labs(title = "Coeff. of Variation distribution") + box2 + box3
+ggsave("images/CV_distr.png", width = 24, height = 14, units = "cm")
+```
+
+
+```{r}
+box1 <- box_plot(df_agg, "altrd", 1, "#f8766d", "Strassenbau", 0, 15, " ")
+box2 <- box_plot(df_agg, "altrd", 2, "#62B74E", "Strassen und Tiefbau", 0, 15, " ")
+box3 <- box_plot(df_agg, "altrd", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outliers are hidden")
+
+box1 + labs(title = "Alternative difference distribution") + box2 + box3
+ggsave("images/altrd_distr.png", width = 24, height = 14, units = "cm")
+```
+
+```{r regression_jump}
+lm_sb <- function(df, type, bp){
+  df <- df %>% filter(contract_type == type)
+  df <- df %>% mutate(struc_break_str = if_else(date2 >= bp, 1, 0))
+  lm_sb <- lm(altrd ~ date2*struc_break_str, data = df)
+  fit_sb <- lm_sb$fitted.values
+  df$fit <- fit_sb
+  
+  p <- df %>% ggplot(aes(x = date2)) + geom_point(aes(y = altrd)) +geom_line(aes(y = fit, color = "red"))
+  plot(p)
+  return(lm_sb)
+}
+# Strassenbau
+sb1 <- lm_sb(df_agg, 1, 7)
+summary(sb1)
+
+# Strassen und Tiefbau
+sb2 <- lm_sb(df_agg, 2, 6)
+sb2
+summary(sb2)
+# Tiefbau
+
+```
+
+
+# Structural screen
+
+```{r}
+box1 <- box_plot(df_agg, "win_bid", 1, "#f8766d", "Strassenbau", 0, 3*10^6, " ")
+box2 <- box_plot(df_agg, "win_bid", 2, "#62B74E", "Strassen und Tiefbau", 0, 3*10^6," ")
+box3 <- box_plot(df_agg, "win_bid", 3, "#00b0f6", "Tiefbau", 0, 3*10^6, "Note: Outliers are hidden")
 
 box1 + labs(title = "Winning bid distribution") + box2 + box3
 ggsave("images/bid_distr.png", width = 24, height = 14, units = "cm")
 ```
 
 ```{r}
-df_agg %>% 
-  filter(!is.na(contract_type)) %>% 
-  group_by(contract_type) %>% 
-  ggplot(aes(x=date2, y= no_bids, color = as.factor(contract_type),
-             fill = as.factor(contract_type))) +
-  geom_smooth() +
-  theme_minimal() +
-  labs(y = "Number of bids", x = "Year", 
-  title = "Variation in number of bids over time", 
-  caption = "- - - - indicate potential break point") +
-  scale_color_discrete(name = "Contract type", labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau"))
-ggsave("images/number_bids.png", width = 24, height = 14, units = "cm")
+box1 <- box_plot(df_agg, "no_bids", 1, "#f8766d", "Strassenbau", 0, 15, " ")
+box2 <- box_plot(df_agg, "no_bids", 2, "#62B74E", "Strassen und Tiefbau", 0, 15," ")
+box3 <- box_plot(df_agg, "no_bids", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outliers are hidden")
 
+box1 + labs(title = "Number of bids distribution") + box2 + box3
+ggsave("images/no_bids.png", width = 24, height = 14, units = "cm")
 ```
 
