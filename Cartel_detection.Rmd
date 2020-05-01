@@ -199,9 +199,84 @@ kstest_contract(df_classified, 3)
 bp_tief_y <- 11
 bp_str_y <- 6
 
-df_agg %>% select(project, year, contract_type, CV) %>% 
+avg_var_year <- function(df, var){
+  p <- df %>% select(project, year, contract_type, var) %>% 
+    rename(var_ = var) %>% 
   group_by(year, contract_type) %>% 
-  summarise(avg_cv = mean(CV)) %>%
+  summarise(avg_var = mean(var_)) %>%
+  ggplot(aes(x = year, y = avg_var, color = as.factor(contract_type))) + 
+  geom_line() +
+  theme_minimal() +
+  scale_color_discrete(name = "Contract type", labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) 
+  return(p)
+}
+
+CV_plot <- avg_var_year(df_agg, "CV") +
+  labs(y = "Yearly Mean Coeff. of Variation", x = "Year", 
+       title = "Cartels are more likely marked by low values",
+       caption = "- - - - indicate potential break point") +
+  geom_vline(aes(xintercept = bp_str_y), 
+             linetype="dotted", size=1, color = "#f8766d", alpha = 0.5) +
+  geom_vline(aes(xintercept = bp_tief_y), 
+             linetype="dotted", size=1, color = "#6e99f7", alpha = 0.5)
+CV_plot
+ggsave("images/CV_year.png")
+
+
+# For rd, filter away two extreme values:
+df_agg_filtered <- df_agg %>% filter(rd < 1000)
+ #Actual values: 
+rd_12 <- df_agg %>% select(project, year, contract_type, rd) %>% 
+  filter(contract_type == 3, year == 12) %>%
+  group_by(year) %>% 
+  summarise(avg_rd = mean(rd)) %>% select(avg_rd) %>% as.integer()
+
+rd_1 <- df_agg %>% select(project, year, contract_type, rd) %>% 
+  filter(contract_type == 3, year == 1) %>%
+  group_by(year) %>% 
+  summarise(avg_rd = mean(rd)) %>% select(avg_rd) %>% as.integer()
+
+
+annotation <- data.frame(
+   x = c(1,12),
+   y = c(0.5,0.5),
+   label = c(glue::glue("*", round(rd_1)), glue::glue("**", round(rd_12)))
+)
+
+rd_plot <- avg_var_year(df_agg_filtered, "rd") +
+  labs(y = "Yearly Mean Relative Difference", x = "Year", 
+       title = "Cartels are more likely marked by high values",
+       caption = "- - - - indicate potential break point
+Means at * and ** excludes two extreme outliers for Tiefbau") +
+  geom_vline(aes(xintercept = bp_str_y), 
+             linetype="dotted", size=1, color = "#f8766d", alpha = 0.5) +
+  geom_vline(aes(xintercept = bp_tief_y), 
+             linetype="dotted", size=1, color = "#6e99f7", alpha = 0.5) +
+    coord_cartesian(ylim = c(0, 10)) +
+  geom_text(data=annotation, aes(x=x, y=y, label=label), color="#6e99f7", 
+           size=5)
+
+rd_plot
+ggsave("images/rd_year.png")
+
+# Why is RD for Tiefbau so high at year 12?
+df_agg %>% filter(contract_type == 3, year == 12) %>% select(rd) %>% 
+  ggplot(aes(x = rd)) +geom_boxplot()
+
+# One value seem to be circa 6000
+df_agg %>% 
+  filter(contract_type == 3, year == 12) %>% select(rd, project) %>% arrange(-rd)
+# This is project with id 4154
+df %>% filter(project == 4154)
+# Apparently, the variance of the loosing bids is extremely low.
+```
+```{r rd_time}
+bp_tief_y <- 11
+bp_str_y <- 6
+
+df_agg %>% select(project, year, contract_type, rd) %>% 
+  group_by(year, contract_type) %>% 
+  summarise(avg_rd = mean(rd)) %>%
   ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
   geom_line() +
   theme_minimal() +
@@ -295,28 +370,66 @@ box1 + labs(title = "Alternative difference distribution") + box2 + box3
 ggsave("images/altrd_distr.png", width = 24, height = 14, units = "cm")
 ```
 
+```{r rd_distr}
+box1 <- box_plot(df_agg, "rd", 1, "#f8766d", "Strassenbau", 0, 7, " ")
+box2 <- box_plot(df_agg, "rd", 2, "#62B74E", "Strassen und Tiefbau", 0, 7, " ")
+box3 <- box_plot(df_agg, "rd", 3, "#00b0f6", "Tiefbau", 0, 7, "Note: Outliers are hidden")
+
+box1 + labs(title = "Relative difference between winning bid and second lowest bid") + box2 + box3
+ggsave("images/rd_distr.png", width = 24, height = 14, units = "cm")
+
+```
+
+
 ```{r regression_jump}
-lm_sb <- function(df, type, bp){
-  df <- df %>% filter(contract_type == type)
-  df <- df %>% mutate(struc_break_str = if_else(date2 >= bp, 1, 0))
-  lm_sb <- lm(altrd ~ date2*struc_break_str, data = df)
+lm_sb <- function(df, type, bp, no_bids_slice){
+  df <- df %>% filter(contract_type == type, no_bids < no_bids_slice )
+  df <- df %>% mutate(bp = if_else(date2 >= bp, 1, 0))
+  lm_sb <- lm(altrd ~ date2*bp, data = df)
   fit_sb <- lm_sb$fitted.values
   df$fit <- fit_sb
   
-  p <- df %>% ggplot(aes(x = date2)) + geom_point(aes(y = altrd)) +geom_line(aes(y = fit, color = "red"))
-  plot(p)
+  p <- df %>% ggplot(aes(x = date2, color = no_bids, alpha = 0.5)) + 
+    geom_point(aes(y = altrd)) + 
+    geom_line(aes(y =fit))
   return(lm_sb)
 }
-# Strassenbau
-sb1 <- lm_sb(df_agg, 1, 7)
-summary(sb1)
 
-# Strassen und Tiefbau
-sb2 <- lm_sb(df_agg, 2, 6)
-sb2
-summary(sb2)
-# Tiefbau
+loop_over_slices <- function(df, type, bp){
+  sb_tab <- tibble()
+  for(bid_limit in 4:15) {
+  reg_output <- lm_sb(df_agg, type, bp, bid_limit)
+  p.value <- summary(reg_output)$coefficients["bp",4]
+  new_obs <- c(type, bid_limit, bp, p.value)
+  sb_tab <- rbind(new_obs, sb_tab)
+  } 
+  names(sb_tab) <- c("Contract type", "No. bidders max.", "Break point","p value break point")
+  return(sb_tab)
+}
 
+loop_over_slices(df_agg, 1, 7)
+loop_over_slices(df_agg, 2, 6)
+loop_over_slices(df_agg, 3, 8)
+
+
+df_agg %>% filter(contract_type == 3) %>% ggplot(aes(x = date, y = probability_collusion, color = contract_type)) + geom_line() + geom_smooth()
+
+plot.ts(df_agg$probability_collusion)
+
+tmp <- df_agg %>% filter(contract_type == 1)  %>% arrange(date2) %>% select(probability_collusion)
+
+acf(tmp, main = "", lag.max =20)
+pacf(tmp, lag.max =20)
+
+library(strucchange)
+Box.test(tmp)
+# If the regression parameters are constant across time, 
+# the residuals should fuctuate around zero. 
+# If, however, there is structural instability, 
+# the residuals systematically increase
+tmp <- df_agg %>% filter(contract_type == 1)
+tmp2 <- efp(CV ~ year, tmp)
+plot(tmp2)
 ```
 
 
