@@ -194,6 +194,7 @@ kstest_contract(df_classified, 1)
 kstest_contract(df_classified, 2)
 kstest_contract(df_classified, 3)
 ```
+# Plot CV and rd over time
 
 ```{r cv_time}
 bp_tief_y <- 11
@@ -270,29 +271,6 @@ df_agg %>%
 df %>% filter(project == 4154)
 # Apparently, the variance of the loosing bids is extremely low.
 ```
-```{r rd_time}
-bp_tief_y <- 11
-bp_str_y <- 6
-
-df_agg %>% select(project, year, contract_type, rd) %>% 
-  group_by(year, contract_type) %>% 
-  summarise(avg_rd = mean(rd)) %>%
-  ggplot(aes(x = year, y = avg_cv, color = as.factor(contract_type))) + 
-  geom_line() +
-  theme_minimal() +
-  scale_color_discrete(name = "Contract type", labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
-  labs(y = "Yearly Mean Coeff. of Variation", x = "Year", 
-       title = "Cartels are more likely marked by low values",
-       caption = "- - - - indicate potential break point") +
-  geom_vline(aes(xintercept = bp_str_y), 
-             linetype="dotted", size=1, color = "#f8766d", alpha = 0.5) +
-  geom_vline(aes(xintercept = bp_tief_y), 
-             linetype="dotted", size=1, color = "#00b0f6", alpha = 0.5)
-
-ggsave("images/CV_year.png")
-```
-
-# Plot CV over time
 
 
 ```{r find_bp}
@@ -381,6 +359,8 @@ ggsave("images/rd_distr.png", width = 24, height = 14, units = "cm")
 ```
 
 
+
+
 ```{r regression_jump}
 lm_sb <- function(df, type, bp, no_bids_slice){
   df <- df %>% filter(contract_type == type, no_bids < no_bids_slice )
@@ -452,4 +432,65 @@ box3 <- box_plot(df_agg, "no_bids", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outli
 box1 + labs(title = "Number of bids distribution") + box2 + box3
 ggsave("images/no_bids.png", width = 24, height = 14, units = "cm")
 ```
+
+
+```{r}
+df_agg_y <- df_agg %>% group_by(year, contract_type) %>% summarise(mean_value = mean(win_bid),
+                                        sd_value = sd(win_bid),
+                                        num_tenders = n())
+
+df_agg_y %>% ggplot(aes(x = year, num_tenders, color = as.factor(contract_type))) +
+  geom_line()
+```
+
+```{r Benford}
+# https://en.wikipedia.org/wiki/Benford%27s_law
+# Theoretical distribution of digits:
+benford_freq <- function(digit){
+  freq <- log(1 + 1/digit, base = 10)
+  return(freq)
+}
+
+empirical_freq <- function(df, bid_var, num_digits){
+  freq_vec <- df %>% rename(bid = bid_var) %>%
+    mutate(first_digit = substr(paste(bid), 1, 2)) %>% 
+    count(first_digit, name = "digit_count") %>%
+    mutate(cases = nrow(df),
+    emp_freq = digit_count/cases) %>% select(first_digit, emp_freq)
+  return(freq_vec)
+}
+
+# Analyse years 1 to 6 for Strassenbau:
+year_range <- 1:6
+type <- 1
+df_filt <- df %>% filter(anonymisedyear %in% year_range, 
+                         contract_type == type)
+df_filt_win <- df_agg %>% filter(year %in% year_range, 
+                         contract_type == type)
+
+freq_all <- empirical_freq(df_filt, "bid", 2) %>% rename(all = emp_freq)
+freq_win <- empirical_freq(df_filt_win, "win_bid", 2) %>% rename(win = emp_freq)
+freq_ben <- benford_freq(10:99)
+
+freq_tab <- cbind(freq_ben, freq_all)
+freq_tab <- left_join(freq_tab, freq_win, by=c("first_digit", "first_digit")) # not all values exist in the win vector
+
+freq_tab %>%
+  gather(key = freq, value = "value", c(win, freq_ben))%>% 
+  ggplot(aes(x = as.integer(first_digit), y = value, color = freq)) + 
+  geom_point() +
+  theme_minimal() +
+  labs(y = "", x = "First two significant digits", 
+       title = "Frequency", 
+       caption = "Plot shows winning bids between years 1 and 6 where contract type is Strassenbau") +
+  scale_color_manual(name = "Distribution", values=c("skyblue", "coral"), labels = c("Theoretical", "Empirical"))
+ggsave("images/benford.png")
+
+chisq.test(x = freq_tab$win, y = freq_tab$freq_ben)
+ks.test(x = freq_tab$win, y = freq_tab$freq_ben) # Significant at p = 0.00267 but this is true for seemingly fair periods too.
+
+
+
+```
+
 
