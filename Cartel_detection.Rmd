@@ -61,12 +61,10 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
 ```{r cleaning}
 # NOTE that many observations dissapear here
 # Lost observations due to missings: 4434 - 3811 = 623
-df_agg %>% select(project, CV, no_bids, contract_type) %>% filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit() -> df_agg_filtered
+df_agg_filtered <- df_agg %>% select(project, CV, altrd, contract_type) %>%
+  filter_all(any_vars(!is.infinite(df_agg$altrd))) %>% na.omit()
 
 df_agg <- left_join(df_agg_filtered, df_agg)
-
-# clean away extreme values of altrd
-#df_agg <- df_agg %>% filter(altrd < 10)
 ```
 
 ## Apply model
@@ -135,7 +133,7 @@ conf_mat$colors <- c(0,1,1,0)
 # Plot the confusion matrix
 conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
   geom_tile(aes(fill = colors)) + 
-  labs(title = "Model accuracy", subtitle = "Expected fraction of predicted status by true status",
+  labs(title =  "Accuracy of the Huber, Imhof (2018) model", subtitle = "Expected fraction of predicted status by true status",
        y = "Actual cartel status", x = "Predicted cartel status") + 
   theme_minimal() +
   geom_text(aes(label = round(conf_data, 2)),size = 8, color = "white") +
@@ -163,13 +161,13 @@ plot_dist <- function(data, contract, category_name){
     scale_fill_manual(values=c("skyblue", "coral")) +
     theme_minimal() + labs(x = "") +
     #theme(legend.position = "None") +
-    labs(title = category_name, y = "Fraction") +
+    labs(subtitle = category_name, y = "Fraction") +
     geom_hline(yintercept=FP[[dc_ix]], linetype="dashed", 
                 color = "black", size=0.5) +
-    xlim(min(floor(df_classified$date2)) - 1, max(floor(df_classified$date2)) +1)
+    xlim(min(floor(data$date2)) - 1, max(floor(data$date2)) +1)
 }
 
-dist_cat1 <- plot_dist(df_classified, 1, "Strassenbau") + theme(legend.position = "None")
+dist_cat1 <- plot_dist(df_classified, 1, "Strassenbau") + theme(legend.position = "None") + labs(title = "Share of predicted cartels over time")
 dist_cat2 <- plot_dist(df_classified, 2, "Strassen und Tiefbau")
 dist_cat3 <- plot_dist(df_classified, 3, "Tiefbau") + theme(legend.position = "None")
 
@@ -316,6 +314,17 @@ Also, Difference between the two lowest bids divided by the standard deviation o
 Descriptive statistics, by type:
 Procedure type (var, mean, bids)
 
+```{r check_correlation}
+df_agg %>% ggplot(aes(x = no_bids, y = log(win_bid), color = as.factor(contract_type))) + 
+  geom_jitter(alpha = 0.5)
+
+cor(df_agg$no_bids, log(df_agg$win_bid))
+
+```
+
+
+
+
 ```{r}
 box_plot <- function(df, variable, type, color, type_name, y_min, y_max, note){
   plot <- melt(df, id.var = c("contract_type", "year"), measure.vars = c(variable)) %>%
@@ -416,22 +425,55 @@ plot(tmp2)
 # Structural screen
 
 ```{r}
-box1 <- box_plot(df_agg, "win_bid", 1, "#f8766d", "Strassenbau", 0, 3*10^6, " ")
-box2 <- box_plot(df_agg, "win_bid", 2, "#62B74E", "Strassen und Tiefbau", 0, 3*10^6," ")
-box3 <- box_plot(df_agg, "win_bid", 3, "#00b0f6", "Tiefbau", 0, 3*10^6, "Note: Outliers are hidden")
+box1 <- box_plot(df_agg, "win_bid", 1, "#f8766d", "Strassenbau", 0, 3*10^6, " ") +
+  scale_y_continuous(name="CHF", labels = scales::comma)
+box2 <- box_plot(df_agg, "win_bid", 2, "#62B74E", "Strassen und Tiefbau", 0, 3*10^6," ") +
+  scale_y_continuous(name="", labels = scales::comma)
+box3 <- box_plot(df_agg, "win_bid", 3, "#00b0f6", "Tiefbau", 0, 3*10^6, "Note: Outliers are hidden") +
+  scale_y_continuous(name="", labels = scales::comma)
 
 box1 + labs(title = "Winning bid distribution") + box2 + box3
 ggsave("images/bid_distr.png", width = 24, height = 14, units = "cm")
 ```
 
-```{r}
+```{r no_bid_distribution}
 box1 <- box_plot(df_agg, "no_bids", 1, "#f8766d", "Strassenbau", 0, 15, " ")
 box2 <- box_plot(df_agg, "no_bids", 2, "#62B74E", "Strassen und Tiefbau", 0, 15," ")
 box3 <- box_plot(df_agg, "no_bids", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outliers are hidden")
 
 box1 + labs(title = "Number of bids distribution") + box2 + box3
 ggsave("images/no_bids.png", width = 24, height = 14, units = "cm")
+
+# Also add average number of bids:
+df_agg %>% group_by(year, contract_type) %>% 
+summarise(mean_bids = mean(no_bids)) %>% 
+ggplot(aes(x = year, y = mean_bids)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  labs(y = "", x = "Year", title = "Mean number of bids per tender by year")  +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
+  coord_cartesian(xlim = c(1, 14), ylim = c(0, 7))
+ggsave("images/no_bids_means.png", width = 24, height = 14, units = "cm")
+
 ```
+
+Can the increase in the number of bids in Strassenbau be explained by the procedure shifting towards open procedures?
+```{r}
+# First, number of bids by type:
+df_agg %>% filter(contract_type == 1) %>% group_by(procedure, year) %>% 
+  summarise(no_bids_mean = mean(no_bids)) %>%
+  ggplot(aes(x = year, y = no_bids_mean, color = procedure)) +
+  geom_line()
+
+# Then, frequency of types:
+df_agg %>% filter(contract_type == 1) %>% group_by(procedure, year) %>% 
+  summarise(no_tenders = n()) %>%
+  ggplot(aes(x = year, y = no_tenders, color = procedure)) +
+  geom_line()
+```
+It does not seem to be the case that the procedure type changes and explains the drop in number of bids.
 
 
 ```{r}
@@ -443,54 +485,139 @@ df_agg_y %>% ggplot(aes(x = year, num_tenders, color = as.factor(contract_type))
   geom_line()
 ```
 
-```{r Benford}
-# https://en.wikipedia.org/wiki/Benford%27s_law
-# Theoretical distribution of digits:
-benford_freq <- function(digit){
-  freq <- log(1 + 1/digit, base = 10)
-  return(freq)
-}
 
-empirical_freq <- function(df, bid_var, num_digits){
-  freq_vec <- df %>% rename(bid = bid_var) %>%
-    mutate(first_digit = substr(paste(bid), 1, 2)) %>% 
-    count(first_digit, name = "digit_count") %>%
-    mutate(cases = nrow(df),
-    emp_freq = digit_count/cases) %>% select(first_digit, emp_freq)
-  return(freq_vec)
-}
+Here, we check for effects related to procedure type.
 
-# Analyse years 1 to 6 for Strassenbau:
-year_range <- 1:6
-type <- 1
-df_filt <- df %>% filter(anonymisedyear %in% year_range, 
-                         contract_type == type)
-df_filt_win <- df_agg %>% filter(year %in% year_range, 
-                         contract_type == type)
+```{r subanalysis}
+# What is the distribution of the different procedures?
+df_agg %>% ggplot(aes(x = procedure)) + geom_bar() # Many NAs!
+df_agg %>% group_by(procedure) %>% summarise(count = n())
 
-freq_all <- empirical_freq(df_filt, "bid", 2) %>% rename(all = emp_freq)
-freq_win <- empirical_freq(df_filt_win, "win_bid", 2) %>% rename(win = emp_freq)
-freq_ben <- benford_freq(10:99)
+# Create dfs to analyse the procedures 
+df_einladung <- df_classified %>% filter(procedure == "Einladung")
+df_offenes <- df_classified %>% filter(procedure == "Offenes")
+df_other <- df_classified %>% filter(!procedure %in% c("Einladung", "Offenes"))
 
-freq_tab <- cbind(freq_ben, freq_all)
-freq_tab <- left_join(freq_tab, freq_win, by=c("first_digit", "first_digit")) # not all values exist in the win vector
 
-freq_tab %>%
-  gather(key = freq, value = "value", c(win, freq_ben))%>% 
-  ggplot(aes(x = as.integer(first_digit), y = value, color = freq)) + 
-  geom_point() +
-  theme_minimal() +
-  labs(y = "", x = "First two significant digits", 
-       title = "Frequency", 
-       caption = "Plot shows winning bids between years 1 and 6 where contract type is Strassenbau") +
-  scale_color_manual(name = "Distribution", values=c("skyblue", "coral"), labels = c("Theoretical", "Empirical"))
-ggsave("images/benford.png")
+# Einladung
+dist_cat1 <- plot_dist(df_einladung, 1, "Strassenbau") + theme(legend.position = "None") + labs(title = "Share of predicted cartels over time within invitation procedure")
+dist_cat2 <- plot_dist(df_einladung, 2, "Strassen und Tiefbau")
+dist_cat3 <- plot_dist(df_einladung, 3, "Tiefbau") + theme(legend.position = "None")
 
-chisq.test(x = freq_tab$win, y = freq_tab$freq_ben)
-ks.test(x = freq_tab$win, y = freq_tab$freq_ben) # Significant at p = 0.00267 but this is true for seemingly fair periods too.
+dist_cat1 / dist_cat2 / dist_cat3 + 
+  labs(caption = "Note: - - - - denotes the fraction of expected predicted cartels given no cartel (false positives)", x = "Year")
+ggsave("images/sub/densities_ein.png")
+
+# Offenes
+dist_cat1 <- plot_dist(df_offenes, 1, "Strassenbau") + theme(legend.position = "None") + labs(title = "Share of predicted cartels over time within open tender procedure")
+dist_cat2 <- plot_dist(df_offenes, 2, "Strassen und Tiefbau")
+dist_cat3 <- plot_dist(df_offenes, 3, "Tiefbau") + theme(legend.position = "None")
+
+dist_cat1 / dist_cat2 / dist_cat3 + 
+  labs(caption = "Note: - - - - denotes the fraction of expected predicted cartels given no cartel (false positives)", x = "Year")
+ggsave("images/sub/densities_off.png")
+
+# Other
+dist_cat1 <- plot_dist(df_other, 1, "Strassenbau") + theme(legend.position = "None") + labs(title = "Share of predicted cartels over time within Freihändiges and NA tender procedure")
+dist_cat2 <- plot_dist(df_other, 2, "Strassen und Tiefbau")
+dist_cat3 <- plot_dist(df_other, 3, "Tiefbau") + theme(legend.position = "None")
+
+dist_cat1 / dist_cat2 / dist_cat3 + 
+  labs(caption = "Note: - - - - denotes the fraction of expected predicted cartels given no cartel (false positives)", x = "Year")
+ggsave("images/sub/densities_other.png")
 
 
 
 ```
 
+```{r subanalysis_bp}
+# Look for break points within the Einladung procedure
+# Number of bids
+df_einladung %>% group_by(year, contract_type) %>% 
+summarise(mean_bids = mean(no_bids)) %>% 
+ggplot(aes(x = year, y = mean_bids)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  labs(y = "", x = "Year", title = "Mean number of bids per year",
+       subtitle = "Among tenders of procedure Einladung")  +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
+  coord_cartesian(ylim = c(0, 7))
+ggsave("images/sub/no_bids_ein_means.png", width = 24, height = 14, units = "cm")
 
+# What about the winning bids?
+df_einladung %>% group_by(year, contract_type) %>% 
+summarise(mean_win_bid = mean(win_bid)) %>% 
+ggplot(aes(x = year, y = mean_win_bid)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  labs(y = "CHF", x = "Year", title = "Mean win bid",
+       subtitle = "Among tenders of procedure Einladung")  +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
+  scale_y_continuous(name="", labels = scales::comma)
+ggsave("images/sub/no_bids_ein_wins.png", width = 24, height = 14, units = "cm")
+
+
+# Now, check CV:
+#CV
+df_einladung %>% group_by(year, contract_type) %>% 
+summarise(mean_CV = mean(CV)) %>% 
+ggplot(aes(x = year, y = mean_CV)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  labs(y = "", x = "Year", title = "Mean CV")  +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) 
+ggsave("images/sub/CV_sub.png", width = 24, height = 14, units = "cm")
+
+
+# Mann Whitney test scatter plot of break in CV for Strassenbau
+bp <- 2200 # when using the "date" variable
+bp2 <- (bp-1)/(365.25) + 1 # when using the date2 variable which shows values in years
+
+df_einladung %>% filter(contract_type == 1) %>%
+ggplot(aes(x = date2, y = CV)) +
+  geom_point(size = 1, alpha = 0.75) + 
+  theme_minimal() +
+  geom_vline(xintercept = bp2) +
+  labs(y = "", x = "Year", title = "CV")
+ggsave("images/sub/CV_point_str.png", width = 24, height = 14, units = "cm")
+
+
+df_einladung_split <-df_einladung %>% mutate(pos = ifelse(date < bp, 1, 0))
+wilcox.test(CV ~ pos, data=df_einladung_split) # Highly significant
+kstest_contract(df_einladung_split, 1)
+
+
+
+```
+
+To complete the analysis, we provide a regression discontinuity graph.
+```{r rdd}
+# Add a rdd
+df_rd <- df_agg %>% filter(contract_type == 1) %>% mutate(Treatment = as.factor(ifelse(date < bp, 1, 0)))
+
+ols_fit <- lm(probability_collusion ~ date2 + Treatment*date2 + Treatment, data = df_rd)
+
+summary(ols_fit)
+p_rd <- summary(ols_fit)$coefficients["Treatment1",4]
+df_rd %>% 
+  ggplot(aes(x = date2, y = probability_collusion, 
+             color = Treatment, fill = Treatment)) +
+  geom_smooth(method = lm) +
+  geom_vline(xintercept = bp2, linetype = "dashed") +
+  theme_minimal() +
+  geom_point(size = 0.2, alpha = 0.5) +
+  scale_color_manual(name = "Time", values=c("skyblue", "coral"), labels = c("After", "Before")) +
+  scale_fill_manual(name = "Time", values=c("skyblue", "coral"), labels = c("After", "Before")) +
+  labs(x = "Year", y = "Probability of collusion", 
+       title = "Sharp RD confirms the discontinuity", subtitle = "Within the Strassenbau sector",
+       caption = glue::glue("Breakpoint p = ", round(p_rd, 4)))
+ggsave("images/strbau_rd.png", width = 24, height = 14, units = "cm")
+# Note that graph is probably biased by the long estimation window and linearity
+
+```
