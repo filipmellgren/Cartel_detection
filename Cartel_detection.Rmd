@@ -1,14 +1,18 @@
 ---
 title: "Cartel detection"
-author: "Margherita Atzei, Sebastian Kimm Friedberg, Oscar Krumlinde, Filip Mellgren"
+author: "Margherita Atzei, Sebastian Kimm Friedenberg, Oscar Krumlinde, Filip Mellgren"
 date: '2020-03-11'
 output:
-  pdf_document: default
-  html_document: default
+  html_document:
+    code_folding: hide
+    df_print: kable
+    toc: true
+  pdf_document:
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
 ```
 
 ```{r imports, include = FALSE}
@@ -28,7 +32,7 @@ dc <- 0.7 # Decision criteria cut off
 # Data cleaning
 Create the necessary aggregate statistics we will be analysing throughout
 
-```{r aggregate}
+```{r aggregate, include = FALSE}
 # Create statistics used for behavioral screening 
 df %>% arrange(project, bid) %>% group_by(project) %>% 
    mutate(
@@ -36,7 +40,7 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
   summarise(
     mean_bid = mean(bid), 
     no_bids = n(),
-    sdev_bid = sd(bid), # NOTE: sd() defaults t0 denom n-1, want n.
+    sdev_bid = sd(bid), # NOTE: sd() defaults t0 denom n-1, want n because we have the full population.
     win_bid = min(bid),
     date = first(anonymiseddate), 
     year = first(anonymisedyear), 
@@ -58,7 +62,7 @@ df %>% arrange(project, bid) %>% group_by(project) %>%
     ) -> df_agg
 ```
 
-For convenience, we drop observations where CV or altrd does not exist or are infinite. These two variables provide the bulk of the analysis and dropping them early therefore has no effect on most graphs as they would have been dropped anyway. For the results that do not depend on the two variables, the difference is small.
+For convenience, we drop observations where CV or altrd does not exist or are infinite. These two variables provide the bulk of the analysis and dropping them early therefore has no effect on most graphs as they would have been dropped anyway. For the results that do not depend on the two variables, the difference is small and doesn't change the conclusion.
 
 ```{r cleaning}
 # NOTE that some observations disappear here
@@ -69,19 +73,12 @@ df_agg <- left_join(df_agg_filtered, df_agg)
 ```
 
 
-
 # Structural screen, descriptive statistics
-First, check correlation between number of bids and the log of the winning bid.
-```{r check_correlation}
-df_agg %>% ggplot(aes(x = no_bids, y = log(win_bid), color = as.factor(contract_type))) + 
-  geom_jitter(alpha = 0.5)
 
-cor(df_agg$no_bids, log(df_agg$win_bid))
 
-```
 
-We will be looking at boxplots, therefore we create a convenience function for future use:
-```{r box_plot_function}
+We will be looking at boxplots and line graphs, therefore we create convenience functions for future use:
+```{r plot_functions}
 box_plot <- function(df, variable, type, color, type_name, y_min, y_max, note){
   plot <- melt(df, id.var = c("contract_type", "year"), measure.vars = c(variable)) %>%
     filter(contract_type == type) %>% 
@@ -91,6 +88,21 @@ box_plot <- function(df, variable, type, color, type_name, y_min, y_max, note){
     coord_cartesian(ylim = c(y_min, y_max))
   return(plot)
 }
+
+avg_var_year <- function(df, var){
+  p <- df %>% select(project, year, contract_type, var) %>% 
+    rename(var_ = var) %>% 
+  group_by(year, contract_type) %>% 
+  summarise(avg_var = mean(var_)) %>%
+  ggplot(aes(x = year, y = avg_var)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau"))
+  return(p)
+}
+
 ```
 
 What is the distribution of the winning bids by category type and year?
@@ -106,6 +118,7 @@ box3 <- box_plot(df_agg, "win_bid", 3, "#00b0f6", "Tiefbau", 0, 3*10^6, "Note: O
 box1 + labs(title = "Winning bid distribution") + box2 + box3
 ggsave("images/bid_distr.png", width = 24, height = 14, units = "cm")
 ```
+
 Next, how does the number of bids change over time?
 
 ```{r no_bid_distribution}
@@ -117,12 +130,7 @@ box1 + labs(title = "Number of bids distribution") + box2 + box3
 ggsave("images/no_bids.png", width = 24, height = 14, units = "cm")
 
 # Also add average number of bids:
-df_agg %>% group_by(year, contract_type) %>% 
-summarise(mean_bids = mean(no_bids)) %>% 
-ggplot(aes(x = year, y = mean_bids)) + 
-  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
-  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
-  theme_minimal() +
+avg_var_year(df_agg, "no_bids") +
   labs(y = "", x = "Year", title = "Mean number of bids per tender by year")  +
   scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
                      labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
@@ -131,7 +139,21 @@ ggsave("images/no_bids_means.png", width = 24, height = 14, units = "cm")
 
 ```
 
-Can the increase in the number of bids in Strassenbau be explained by the procedure shifting towards open procedures?
+The number of bids is fairly constant around 5 or 6 over time, but based on the boxplots, does exhibit upward skewness meaning that there for some projects are many bidders.
+
+Can this be explained by project size?
+```{r check_correlation}
+df_agg %>% ggplot(aes(x = log(win_bid), y = no_bids, color = as.factor(contract_type))) + 
+  geom_jitter(alpha = 0.5)
+
+cor(df_agg$no_bids, log(df_agg$win_bid))
+
+```
+
+There is a small but positive correlation. Not definitely the reason why there is some variation.
+
+
+How does the procedure type change over time?
 ```{r}
 # First, number of bids by type:
 df_agg %>% filter(contract_type == 1) %>% group_by(procedure, year) %>% 
@@ -145,6 +167,7 @@ df_agg %>% filter(contract_type == 1) %>% group_by(procedure, year) %>%
   ggplot(aes(x = year, y = no_tenders, color = procedure)) +
   geom_line()
 ```
+
 It does not seem to be the case that the procedure type changes and explains the drop in number of bids.
 
 Now, let's look at the total number of tenders over time:
@@ -158,39 +181,85 @@ df_agg_y %>% ggplot(aes(x = year, num_tenders, color = as.factor(contract_type))
   geom_line()
 ```
 
-Most tenders are within the pure categories during years 1 to 10.
+Most tenders are within the pure categories during years 1 to 10. We can expect values to be the most "stable" for the pure contract types in the early years.
 
 # First behavioural screen, time series and structural breaks
 Now, we move on to focus on the time variation of bidding behaviour.
 
 ```{r cv_time}
-bp_tief_y <- 11
-bp_str_y <- 6
-
-avg_var_year <- function(df, var){
-  p <- df %>% select(project, year, contract_type, var) %>% 
-    rename(var_ = var) %>% 
-  group_by(year, contract_type) %>% 
-  summarise(avg_var = mean(var_)) %>%
-  ggplot(aes(x = year, y = avg_var, color = as.factor(contract_type))) + 
-  geom_line() +
-  theme_minimal() +
-  scale_color_discrete(name = "Contract type", labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) 
-  return(p)
-}
-
 CV_plot <- avg_var_year(df_agg, "CV") +
   labs(y = "Yearly Mean Coeff. of Variation", x = "Year", 
        title = "Cartels are more likely marked by low values",
-       caption = "- - - - indicate potential break point") +
-  geom_vline(aes(xintercept = bp_str_y), 
-             linetype="dotted", size=1, color = "#f8766d", alpha = 0.5) +
-  geom_vline(aes(xintercept = bp_tief_y), 
-             linetype="dotted", size=1, color = "#6e99f7", alpha = 0.5)
+       caption = "- - - - indicate potential break point")
 CV_plot
-ggsave("images/CV_year.png")
+ggsave("images/CV_year.png", width = 24, height = 14, units = "cm")
+```
 
+The CV is the lowest for Strassenbau, suggesting this type is most prone to collusion. In addition, the level seems to be the lowest in the early years.
 
+Dig deeper using box plots:
+```{r}
+box1 <- box_plot(df_agg, "CV", 1, "#f8766d", "Strassenbau", 0, 40, " ")
+box2 <- box_plot(df_agg, "CV", 2, "#62B74E", "Strassen und Tiefbau", 0, 40, " ")
+box3 <- box_plot(df_agg, "CV", 3, "#00b0f6", "Tiefbau", 0, 40, "Note: Outliers are hidden")
+
+box1 + labs(title = "Coeff. of Variation distribution") + box2 + box3
+ggsave("images/CV_distr.png", width = 24, height = 14, units = "cm")
+```
+
+Also the median seems consistent with the mean presented above. It also looks a bit surpressed for CV in the early years compared to the other categories where values frequent around 20.
+
+How does the altrd develop over time?
+```{r}
+box1 <- box_plot(df_agg, "altrd", 1, "#f8766d", "Strassenbau", 0, 15, " ")
+box2 <- box_plot(df_agg, "altrd", 2, "#62B74E", "Strassen und Tiefbau", 0, 15, " ")
+box3 <- box_plot(df_agg, "altrd", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outliers are hidden")
+
+box1 + labs(title = "Alternative difference distribution") + box2 + box3
+ggsave("images/altrd_distr.png", width = 24, height = 14, units = "cm")
+
+altrd_plot <- avg_var_year(df_agg, "altrd") +
+  labs(y = "Yearly Mean alt. difference", x = "Year", 
+       title = "Cartels are more likely marked by high values",
+       caption = "- - - - indicate potential break point
+       In years 1 and 12, Tiefbau is largely driven by two extreme outliers ") +
+  coord_cartesian(ylim = c(0, 10))
+altrd_plot
+ggsave("images/altrd_mean.png", width = 24, height = 14, units = "cm")
+```
+
+The last graph showing means is much too noisy. We know this happens because of two outlier values as we will see later. To avoid this problem, we chose to instead look at the medians:
+```{r}
+altrd_plot <- df_agg %>% select(project, year, contract_type, altrd) %>% 
+  group_by(year, contract_type) %>% 
+  summarise(altrd_median = median(altrd)) %>%
+  ggplot(aes(x = year, y = altrd_median)) + 
+  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
+  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
+  theme_minimal() +
+  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
+                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
+  labs(y = "Yearly median alt. difference", x = "Year", 
+       title = "Cartels are more likely marked by high values",
+       caption = "- - - - indicate potential break point")
+altrd_plot
+
+ggsave("images/altrd_median.png", width = 24, height = 14, units = "cm")
+```
+
+This plot is also very noisy unfortunately, but at least everything is scaled well. Gives a sense that altrd is decreasing over time which would point towards cartels being more prevalent in the early years. Again, Strassenbau stands out as the highest and thereby the one that looks most collusive.
+
+Is rd different?
+```{r rd_distr}
+box1 <- box_plot(df_agg, "rd", 1, "#f8766d", "Strassenbau", 0, 7, " ")
+box2 <- box_plot(df_agg, "rd", 2, "#62B74E", "Strassen und Tiefbau", 0, 7, " ")
+box3 <- box_plot(df_agg, "rd", 3, "#00b0f6", "Tiefbau", 0, 7, "Note: Outliers are hidden")
+
+box1 + labs(title = "Relative difference between winning bid and second lowest bid") + box2 + box3
+ggsave("images/rd_distr.png", width = 24, height = 14, units = "cm")
+```
+
+```{r}
 # For rd, filter away two extreme values:
 df_agg_filtered <- df_agg %>% filter(rd < 1000)
  #Actual values: 
@@ -216,88 +285,30 @@ rd_plot <- avg_var_year(df_agg_filtered, "rd") +
        title = "Cartels are more likely marked by high values",
        caption = "- - - - indicate potential break point
 Means at * and ** excludes two extreme outliers for Tiefbau") +
-  geom_vline(aes(xintercept = bp_str_y), 
-             linetype="dotted", size=1, color = "#f8766d", alpha = 0.5) +
-  geom_vline(aes(xintercept = bp_tief_y), 
-             linetype="dotted", size=1, color = "#6e99f7", alpha = 0.5) +
     coord_cartesian(ylim = c(0, 10)) +
   geom_text(data=annotation, aes(x=x, y=y, label=label), color="#6e99f7", 
            size=5)
 
 rd_plot
 ggsave("images/rd_year.png")
+```
 
-# Why is RD for Tiefbau so high at year 12?
+Why is RD for Tiefbau so high at year 12?
+
+```{r}
 df_agg %>% filter(contract_type == 3, year == 12) %>% select(rd) %>% 
   ggplot(aes(x = rd)) +geom_boxplot()
+```
 
-# One value seem to be circa 6000
+One value seem to be circa 6000
+```{r}
 df_agg %>% 
   filter(contract_type == 3, year == 12) %>% select(rd, project) %>% arrange(-rd)
 # This is project with id 4154
 df %>% filter(project == 4154)
-# Apparently, the variance of the loosing bids is extremely low.
 ```
 
-
-```{r find_bp}
-# Find break points based on visual inspection of CV
-bp_tief <- round(bp_tief_y * 365.25, 0)
-bp_str <- round(bp_str_y * 365.25, 0)
-
-```
-
-```{r test_bp}
-library(strucchange)
-
-chow_test <- function(df, bp){
-  sc <- sctest(df$altrd ~ df$date, type = "Chow", point = bp)
-  return(sc)
-}
-
-df_str <- df_agg %>% filter(contract_type == 1) %>% 
-  mutate(dist_to_bp = abs(bp_str - date)) %>% select(dist_to_bp, date, altrd)
-bp_str_date <- which(df_str$dist_to_bp == min(df_str$dist_to_bp))
-
-df_tief <- df_agg %>% filter(contract_type == 3) %>% 
-  mutate(dist_to_bp = abs(bp_tief - date)) %>% select(dist_to_bp, date, altrd)
-bp_tief_date <- which(df_tief$dist_to_bp == min(df_tief$dist_to_bp))
-
-# Test break points on altrd, which wasn't used to find break points
-chow_test(df_str, 135) 
-chow_test(df_tief, bp_tief_date)
-```
-
-How does the coefficient of variation develop?
-```{r}
-box1 <- box_plot(df_agg, "CV", 1, "#f8766d", "Strassenbau", 0, 40, " ")
-box2 <- box_plot(df_agg, "CV", 2, "#62B74E", "Strassen und Tiefbau", 0, 40, " ")
-box3 <- box_plot(df_agg, "CV", 3, "#00b0f6", "Tiefbau", 0, 40, "Note: Outliers are hidden")
-
-box1 + labs(title = "Coeff. of Variation distribution") + box2 + box3
-ggsave("images/CV_distr.png", width = 24, height = 14, units = "cm")
-```
-
-How does the altrd develop over time?
-```{r}
-box1 <- box_plot(df_agg, "altrd", 1, "#f8766d", "Strassenbau", 0, 15, " ")
-box2 <- box_plot(df_agg, "altrd", 2, "#62B74E", "Strassen und Tiefbau", 0, 15, " ")
-box3 <- box_plot(df_agg, "altrd", 3, "#00b0f6", "Tiefbau", 0, 15, "Note: Outliers are hidden")
-
-box1 + labs(title = "Alternative difference distribution") + box2 + box3
-ggsave("images/altrd_distr.png", width = 24, height = 14, units = "cm")
-```
-
-Is rd different?
-```{r rd_distr}
-box1 <- box_plot(df_agg, "rd", 1, "#f8766d", "Strassenbau", 0, 7, " ")
-box2 <- box_plot(df_agg, "rd", 2, "#62B74E", "Strassen und Tiefbau", 0, 7, " ")
-box3 <- box_plot(df_agg, "rd", 3, "#00b0f6", "Tiefbau", 0, 7, "Note: Outliers are hidden")
-
-box1 + labs(title = "Relative difference between winning bid and second lowest bid") + box2 + box3
-ggsave("images/rd_distr.png", width = 24, height = 14, units = "cm")
-
-```
+Apparently, the variance of the loosing bids is extremely low. This also explains why altrd was so extreme when we looked at the means.
 
 
 # Second behavoural screen, fit model
@@ -337,6 +348,7 @@ df_agg %>%
 Based on Figure 3 in the paper, we can get a sense of how good the classifier is. Unfortunately, it does not report results for the model where we have the coefficients available. Anyhow, it is a usual conceptual tool and the two models (the logisitc regression we use, and the lasso logistic regression on which the confusion matrix is based) share the same variables and functional form and are thus expected to yield similar results.
 ```{r}
 # Data from ML paper fig 3
+# Note that it works for different decision criteria
 TP <- c(1, 0.91, 0.85, 0.77, 0.64, 0.38)
 TN <- c(0, 0.69, 0.78, 0.86, 0.91, 0.97)
 FP <- 1 - TN
@@ -373,8 +385,12 @@ conf_mat %>% ggplot(aes(conf_mat$X, conf_mat$Y)) +
   theme(legend.position = "none")
 ggsave("images/confmat.png")
 ```
+
+The confusion matrix shows us that given that a tender is cartelised, there is a 77 percent probability of labelling it as such. Whereas it labels 14 percent of those that were fair as cartels. This applies if we believe the distribution is the same as in the original paper and that the LASSO and logit models are of similar accuracy.
+
 ## Plot densities of occurences.
 
+Here, we look at how the density is spread over time. Idea is to capture periods with many collusive tenders so that we can form an opinion of whether the period was truly cartelised.
 ```{r density_distribution}
 df_classified <- df_agg %>%
   mutate(pos = if_else(probability_collusion > dc, 1, 0),
@@ -406,27 +422,30 @@ dist_cat1 / dist_cat2 / dist_cat3 +
 ggsave("images/densities.png")
 ```
 
+This graph confirms what we previously saw. Namely that Strassenbau is the most suspicious category and that it is in particular the early years we should be concerned about. The 14 percent benchmark looks low, as there are two marked periods in Strassenbau, a high and a low, where the low is close to 30 percent or more. While this could be explained by there being a cartel that breaks down only partially, it is probably the case that the true false positive rate is much higher than 14 percent. This implies that Tiefbau is not collusive despite consistenly being above the presumed 14 percent line. 
+
+Next, we test whether the distribution of cartelised bids can be said to be uniform. If not, it is evidence that there is a structural break somewhere. 
 
 ```{r ks_test}
 kstest_contract <- function(df, type){
   # Tests whether the distribution of all predicted cartels follow the same 
   # distribution as all predicted non cartels
   x <- df %>% filter(pos == 1) %>% filter(contract_type == type) %>% select(date)
-  y <- df %>% filter(pos == 0) %>% filter(contract_type == type) %>% select(date)
   x <- x$date
-  y <- y$date
-  ks.test(x, y)
+  ks.test(x, "punif", min(x),max(x)) # make no use of extreme value theory here, too complicated!
 }
 
 # Test whether events deemed fair respecitve collusive occur at different points in time
-kstest_contract(df_classified, 1)
-kstest_contract(df_classified, 2)
-kstest_contract(df_classified, 3)
+kstest_contract(df_classified, 1) # Significant
+kstest_contract(df_classified, 2) # Not significant
+kstest_contract(df_classified, 3) # Significant
 ```
 
+Two of the tests were significant, those for Strassenbau and Tiefbau. Visibly, Strassenbau has a structural break whereas Tiefbau sees a gradual decline.
 
 
 # Procedure type analysis
+
 Here, we check for effects related to procedure type.
 
 ```{r subanalysis}
@@ -480,23 +499,25 @@ ggsave("images/sub/densities_frei.png")
 
 ```
 
+There are many NA values, meaning that statistical power might be low when analysed at this granularity. Still, a striking result is that Strassenbau again shows a big structural break around year 6. The other sectors look like they could be collusive, but there is not a similarly clear breaking point.
+
+
 ```{r subanalysis_bp}
 # Look for break points within the Einladung procedure
 # Number of bids
-df_einladung %>% group_by(year, contract_type) %>% 
-summarise(mean_bids = mean(no_bids)) %>% 
-ggplot(aes(x = year, y = mean_bids)) + 
-  geom_line(size = 0.75, aes(fill = as.factor(contract_type))) +
-  geom_point(size = 2.5, aes(color=factor(contract_type))) + 
-  theme_minimal() +
-  labs(y = "", x = "Year", title = "Mean number of bids per year",
-       subtitle = "Among tenders of procedure Einladung")  +
-  scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
-                     labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
-  coord_cartesian(ylim = c(0, 7))
+avg_var_year(df_einladung,"no_bids") +labs(y = "", x = "Year", title = "Mean number of bids per year",
+       subtitle = "Among tenders of procedure Einladung") +coord_cartesian(ylim = c(0, 7))
+
 ggsave("images/sub/no_bids_ein_means.png", width = 24, height = 14, units = "cm")
 
-# What about the winning bids?
+box_plot(df_einladung, "no_bids", 1, "#f8766d", "Strassenbau and Einladung procedure", 0, 8, " ")
+```
+
+The mean number of bids look stable, but note that the average is lower than for the full sample. We know that fewer bidders is associated with a higher likelihood of a cartel. The values are also fairly stable over time with no indication of things changing at a particular point in time. 
+
+What about the winning bids?
+
+```{r}
 df_einladung %>% group_by(year, contract_type) %>% 
 summarise(mean_win_bid = mean(win_bid)) %>% 
 ggplot(aes(x = year, y = mean_win_bid)) + 
@@ -509,8 +530,10 @@ ggplot(aes(x = year, y = mean_win_bid)) +
                      labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
   scale_y_continuous(name="", labels = scales::comma)
 ggsave("images/sub/no_bids_ein_wins.png", width = 24, height = 14, units = "cm")
+```
 
-
+Now, let's look at CV
+```{r}
 # Now, check CV:
 #CV
 df_einladung %>% group_by(year, contract_type) %>% 
@@ -523,8 +546,11 @@ ggplot(aes(x = year, y = mean_CV)) +
   scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
                      labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) 
 ggsave("images/sub/CV_sub.png", width = 24, height = 14, units = "cm")
+```
 
+There is a clear shift in the variable around year 6. Let's look at the raw data:
 
+```{r}
 # Mann Whitney test scatter plot of break in CV for Strassenbau
 bp <- 2200 # when using the "date" variable
 bp2 <- (bp-1)/(365.25) + 1 # when using the date2 variable which shows values in years
@@ -542,9 +568,9 @@ df_einladung_split <-df_einladung %>% mutate(pos = ifelse(date < bp, 1, 0))
 wilcox.test(CV ~ pos, data=df_einladung_split) # Highly significant
 kstest_contract(df_einladung_split, 1)
 
-
-
 ```
+
+There is a visible change and the Mann Whitney U test statistic is significant meaning that there is a difference in medians before and after the breka point. Of course this might be due to a trend, but it looks like this is not the case.
 
 To complete the analysis, we provide a regression discontinuity graph.
 ```{r rdd}
@@ -569,9 +595,12 @@ df_rd %>%
   scale_fill_manual(name = "Time", values=c("skyblue", "coral"), labels = c("After", "During")) +
   labs(x = "Year", y = "Probability of collusion", 
        title = "Sharp RD confirms the discontinuity", subtitle = "Within the Strassenbau sector, where procedure was Einladung or unknown",
-       caption = glue::glue("Breakpoint p = ", round(p_rd, 4))) +
-  stat_summary_bin(fun.y='mean', bins=30, size=1.5, geom='point')
+       caption = glue::glue("Breakpoint p = ", round(p_rd, 4)))
 ggsave("images/strbau_rd.png", width = 24, height = 14, units = "cm")
 # Note that graph is probably biased by the long estimation window and linearity
 
 ```
+
+There is a significant break. However, there is a substantial degree of freedome here as the estimation window is somewhat arbitrary.
+
+In addition, we've tried different Chow tests but since the break point is somewhat fluid, it doesn't yield any results. If the cartel breaks down gradually, the test may not be able to detect it.
