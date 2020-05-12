@@ -189,8 +189,7 @@ Now, we move on to focus on the time variation of bidding behaviour.
 ```{r cv_time}
 CV_plot <- avg_var_year(df_agg, "CV") +
   labs(y = "Yearly Mean Coeff. of Variation", x = "Year", 
-       title = "Cartels are more likely marked by low values",
-       caption = "- - - - indicate potential break point")
+       title = "Cartels are more likely marked by low values")
 CV_plot
 ggsave("images/CV_year.png", width = 24, height = 14, units = "cm")
 ```
@@ -221,8 +220,7 @@ ggsave("images/altrd_distr.png", width = 24, height = 14, units = "cm")
 altrd_plot <- avg_var_year(df_agg, "altrd") +
   labs(y = "Yearly Mean alt. difference", x = "Year", 
        title = "Cartels are more likely marked by high values",
-       caption = "- - - - indicate potential break point
-       In years 1 and 12, Tiefbau is largely driven by two extreme outliers ") +
+       caption = "In years 1 and 12, Tiefbau is largely driven by two extreme outliers ") +
   coord_cartesian(ylim = c(0, 10))
 altrd_plot
 ggsave("images/altrd_mean.png", width = 24, height = 14, units = "cm")
@@ -240,8 +238,7 @@ altrd_plot <- df_agg %>% select(project, year, contract_type, altrd) %>%
   scale_color_manual(name = "Contract type", values=c("#f8766d", "#62B74E", "#00b0f6"), 
                      labels = c("Strassenbau", "Strassen und Tiefbau", "Tiefbau")) +
   labs(y = "Yearly median alt. difference", x = "Year", 
-       title = "Cartels are more likely marked by high values",
-       caption = "- - - - indicate potential break point")
+       title = "Cartels are more likely marked by high values")
 altrd_plot
 
 ggsave("images/altrd_median.png", width = 24, height = 14, units = "cm")
@@ -283,8 +280,7 @@ annotation <- data.frame(
 rd_plot <- avg_var_year(df_agg_filtered, "rd") +
   labs(y = "Yearly Mean Relative Difference", x = "Year", 
        title = "Cartels are more likely marked by high values",
-       caption = "- - - - indicate potential break point
-Means at * and ** excludes two extreme outliers for Tiefbau") +
+       caption = "Means at * and ** excludes two extreme outliers for Tiefbau") +
     coord_cartesian(ylim = c(0, 10)) +
   geom_text(data=annotation, aes(x=x, y=y, label=label), color="#6e99f7", 
            size=5)
@@ -310,6 +306,29 @@ df %>% filter(project == 4154)
 
 Apparently, the variance of the loosing bids is extremely low. This also explains why altrd was so extreme when we looked at the means.
 
+Skewness:
+
+```{r}
+box1 <- box_plot(df_agg, "skew", 1, "#f8766d", "Strassenbau", -3, 3, " ")
+box2 <- box_plot(df_agg, "skew", 2, "#62B74E", "Strassen und Tiefbau", -3, 3, " ")
+box3 <- box_plot(df_agg, "skew", 3, "#00b0f6", "Tiefbau", -3, 3, "")
+
+box1 + labs(title = "Skewness distribution") + box2 + box3
+ggsave("images/skew_distr.png", width = 24, height = 14, units = "cm")
+
+```
+Not immediately clear that skewness is relevant. What about kurtosis?
+
+```{r}
+box1 <- box_plot(df_agg, "kurt", 1, "#f8766d", "Strassenbau", -40, 2, " ")
+box2 <- box_plot(df_agg, "kurt", 2, "#62B74E", "Strassen und Tiefbau", -40, 2, " ")
+box3 <- box_plot(df_agg, "kurt", 3, "#00b0f6", "Tiefbau", -40, 2, "")
+
+box1 + labs(title = "Kurtosis distribution") + box2 + box3
+ggsave("images/kurt_distr.png", width = 24, height = 14, units = "cm")
+
+```
+Similarly, it doesn't give a clear picture. Possible that it increases for Strassenbau in the later half. The negative values indicate that the data points are spread out with few outliers (Platycurtic).
 
 # Second behavoural screen, fit model
 In this screen, we apply a pre developed model by Huber and Imhof, "Machine Learning with
